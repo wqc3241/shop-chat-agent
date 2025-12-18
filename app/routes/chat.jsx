@@ -2,6 +2,7 @@
  * Chat API Route
  * Handles chat interactions with OpenAI API and tools
  */
+import "../env.server.js"; // Ensure environment variables are loaded
 import MCPClient from "../mcp-client";
 import { saveMessage, getConversationHistory, storeCustomerAccountUrls, getCustomerAccountUrls as getCustomerAccountUrlsFromDb } from "../db.server";
 import AppConfig from "../services/config.server";
@@ -119,7 +120,13 @@ async function handleChatSession({
   promptType,
   stream
 }) {
+  // #region agent log
+  fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.jsx:115',message:'handleChatSession entry',data:{userMessage,conversationId,promptType,hasOpenAIKey:!!process.env.OPENAI_API_KEY,openAIKeyLength:process.env.OPENAI_API_KEY?.length||0,currentWorkingDir:process.cwd()},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+  // #endregion
   // Initialize services
+  // #region agent log
+  fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.jsx:127',message:'BEFORE createOpenAIService call',data:{hasOpenAIKey:!!process.env.OPENAI_API_KEY,openAIKeyValue:process.env.OPENAI_API_KEY?.substring(0,15)||'undefined'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+  // #endregion
   const openaiService = createOpenAIService();
   const toolService = createToolService();
 
@@ -176,11 +183,22 @@ async function handleChatSession({
       };
     });
 
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.jsx:177',message:'Before streamConversation call',data:{conversationHistoryLength:conversationHistory.length,toolsCount:mcpClient.tools.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
+
     // Execute the conversation stream
     let finalMessage = { role: 'user', content: userMessage };
+    let iterationCount = 0;
+    const maxIterations = 10; // Prevent infinite loops
 
-    while (finalMessage.stop_reason !== "end_turn") {
-      finalMessage = await openaiService.streamConversation(
+    while (finalMessage.stop_reason !== "end_turn" && iterationCount < maxIterations) {
+      iterationCount++;
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.jsx:185',message:'While loop iteration',data:{iterationCount,stopReason:finalMessage.stop_reason},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
+      try {
+        finalMessage = await openaiService.streamConversation(
         {
           messages: conversationHistory,
           promptType,
@@ -263,6 +281,23 @@ async function handleChatSession({
           }
         }
       );
+      } catch (error) {
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.jsx:278',message:'Error caught in streamConversation',data:{errorMessage:error.message,errorStack:error.stack,errorStatus:error.status},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
+        console.error("Error in streamConversation:", error);
+        stream.sendError({
+          type: 'error',
+          error: 'Failed to process your message',
+          details: error.message || 'An unexpected error occurred'
+        });
+        break; // Exit the loop on error
+      }
+    }
+
+    if (iterationCount >= maxIterations) {
+      console.warn("Reached maximum iterations, stopping conversation loop");
+      stream.sendMessage({ type: 'end_turn' });
     }
 
     // Signal end of turn
@@ -276,6 +311,9 @@ async function handleChatSession({
       });
     }
   } catch (error) {
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.jsx:282',message:'Error in handleChatSession catch',data:{errorMessage:error.message,errorStack:error.stack},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
     // The streaming handler takes care of error handling
     throw error;
   }

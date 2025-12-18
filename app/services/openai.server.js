@@ -2,6 +2,7 @@
  * OpenAI Service
  * Manages interactions with the OpenAI API
  */
+import "../env.server.js"; // Ensure environment variables are loaded
 import OpenAI from "openai";
 import AppConfig from "./config.server";
 import systemPrompts from "../prompts/prompts.json";
@@ -12,6 +13,19 @@ import systemPrompts from "../prompts/prompts.json";
  * @returns {Object} OpenAI service with methods for interacting with OpenAI API
  */
 export function createOpenAIService(apiKey = process.env.OPENAI_API_KEY) {
+  // #region agent log
+  fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'openai.server.js:14',message:'createOpenAIService - checking API key',data:{hasApiKeyParam:!!apiKey,hasEnvVar:!!process.env.OPENAI_API_KEY,apiKeyLength:apiKey?.length||0},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+  // #endregion
+  
+  // Validate API key before creating client
+  if (!apiKey) {
+    const errorMsg = "OpenAI API key is not set. Please set OPENAI_API_KEY in your .env file.";
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'openai.server.js:14',message:'API key validation failed',data:{errorMsg},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
+    throw new Error(errorMsg);
+  }
+  
   // Initialize OpenAI client
   const openai = new OpenAI({ 
     apiKey: apiKey
@@ -123,35 +137,67 @@ export function createOpenAIService(apiKey = process.env.OPENAI_API_KEY) {
     promptType = AppConfig.api.defaultPromptType,
     tools
   }, streamHandlers) => {
-    // Get system prompt from configuration or use default
-    const systemInstruction = getSystemPrompt(promptType);
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'openai.server.js:121',message:'streamConversation entry',data:{messagesCount:messages.length,toolsCount:tools?.length||0,model:AppConfig.api.defaultModel,hasApiKey:!!apiKey},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
+    try {
+      // Get system prompt from configuration or use default
+      const systemInstruction = getSystemPrompt(promptType);
 
-    // Convert messages to OpenAI format
-    const openaiMessages = convertMessagesToOpenAIFormat(messages);
-    
-    // Add system message
-    const messagesWithSystem = [
-      { role: "system", content: systemInstruction },
-      ...openaiMessages
-    ];
+      // Convert messages to OpenAI format
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'openai.server.js:131',message:'Before convertMessagesToOpenAIFormat',data:{messagesCount:messages.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+      // #endregion
+      const openaiMessages = convertMessagesToOpenAIFormat(messages);
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'openai.server.js:131',message:'After convertMessagesToOpenAIFormat',data:{openaiMessagesCount:openaiMessages.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+      // #endregion
+      
+      // Add system message
+      const messagesWithSystem = [
+        { role: "system", content: systemInstruction },
+        ...openaiMessages
+      ];
 
-    // Convert tools to OpenAI format
-    const openaiTools = convertToolsToOpenAIFormat(tools);
+      // Convert tools to OpenAI format
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'openai.server.js:140',message:'Before convertToolsToOpenAIFormat',data:{toolsCount:tools?.length||0},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+      // #endregion
+      const openaiTools = convertToolsToOpenAIFormat(tools);
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'openai.server.js:140',message:'After convertToolsToOpenAIFormat',data:{openaiToolsCount:openaiTools?.length||0},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+      // #endregion
 
-    // Create stream
-    const stream = await openai.beta.chat.completions.stream({
-      model: AppConfig.api.defaultModel,
-      max_tokens: AppConfig.api.maxTokens,
-      messages: messagesWithSystem,
-      tools: openaiTools,
-      stream: true
-    });
+      // Validate API key
+      if (!apiKey) {
+        throw new Error("OpenAI API key is not set. Please set OPENAI_API_KEY in your environment variables.");
+      }
+
+      // Create stream
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'openai.server.js:148',message:'Before OpenAI API call',data:{model:AppConfig.api.defaultModel,messagesCount:messagesWithSystem.length,hasTools:!!openaiTools},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
+      const stream = await openai.beta.chat.completions.stream({
+        model: AppConfig.api.defaultModel,
+        max_completion_tokens: AppConfig.api.maxTokens,
+        messages: messagesWithSystem,
+        tools: openaiTools,
+        stream: true
+      });
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'openai.server.js:154',message:'After OpenAI API call - stream created',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
 
     let accumulatedContent = "";
     let toolCalls = [];
+    let chunkCount = 0;
 
     // Process stream chunks
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'openai.server.js:160',message:'Before stream processing loop',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+    // #endregion
     for await (const chunk of stream) {
+      chunkCount++;
       const delta = chunk.choices[0]?.delta;
       
       if (!delta) continue;
@@ -191,8 +237,18 @@ export function createOpenAIService(apiKey = process.env.OPENAI_API_KEY) {
       }
     }
 
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'openai.server.js:200',message:'After stream processing loop',data:{chunkCount,accumulatedContentLength:accumulatedContent.length,toolCallsCount:toolCalls.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+    // #endregion
+
     // Get final message
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'openai.server.js:201',message:'Before finalChatCompletion',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+    // #endregion
     const finalMessage = await stream.finalChatCompletion();
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'openai.server.js:201',message:'After finalChatCompletion',data:{finishReason:finalMessage.choices[0]?.finish_reason},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+    // #endregion
 
     // Process complete message
     const assistantMessage = {
@@ -239,11 +295,29 @@ export function createOpenAIService(apiKey = process.env.OPENAI_API_KEY) {
     }
 
     // Return in a format compatible with the existing code
+    const finishReason = finalMessage.choices[0]?.finish_reason;
     return {
       role: "assistant",
       content: assistantMessage.content ? [{ type: "text", text: assistantMessage.content }] : [],
-      stop_reason: finalMessage.choices[0]?.finish_reason === "stop" ? "end_turn" : finalMessage.choices[0]?.finish_reason
+      stop_reason: finishReason === "stop" || finishReason === "tool_calls" ? "end_turn" : (finishReason || "end_turn")
     };
+    } catch (error) {
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'openai.server.js:254',message:'Error caught in streamConversation',data:{errorMessage:error.message,errorStatus:error.status,errorName:error.name,errorStack:error.stack?.substring(0,500)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
+      console.error("Error in streamConversation:", error);
+      
+      // Provide more detailed error information
+      if (error.status === 401) {
+        throw new Error("Authentication failed with OpenAI API. Please check your API key.");
+      } else if (error.status === 404) {
+        throw new Error(`Model "${AppConfig.api.defaultModel}" not found. Please check the model name.`);
+      } else if (error.message) {
+        throw new Error(`OpenAI API error: ${error.message}`);
+      } else {
+        throw new Error("Failed to get response from OpenAI API. Please check your configuration and API key.");
+      }
+    }
   };
 
   /**

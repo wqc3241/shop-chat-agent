@@ -42,20 +42,65 @@ export function createToolService() {
   const handleToolSuccess = async (toolUseResponse, toolName, toolUseId, conversationHistory, productsToDisplay, conversationId) => {
     // Check if this is a product search result
     if (toolName === AppConfig.tools.productSearchName) {
-      productsToDisplay.push(...processProductSearchResult(toolUseResponse));
+      const processedProducts = processProductSearchResult(toolUseResponse);
+      productsToDisplay.push(...processedProducts);
+      
+      // Enhance tool response content with formatted product information for AI reference
+      // This ensures the AI has access to all product details in a structured format
+      if (toolUseResponse.content && processedProducts.length > 0) {
+        // Create enhanced content that includes both original response and formatted products
+        const originalContent = Array.isArray(toolUseResponse.content) 
+          ? toolUseResponse.content[0]?.text || toolUseResponse.content
+          : toolUseResponse.content;
+        
+        // Parse original content if it's a string
+        let parsedContent = originalContent;
+        if (typeof originalContent === 'string') {
+          try {
+            parsedContent = JSON.parse(originalContent);
+          } catch (e) {
+            // If parsing fails, keep as string
+            parsedContent = originalContent;
+          }
+        }
+        
+        // Add formatted products to the content for AI reference
+        const enhancedContent = {
+          ...parsedContent,
+          formattedProducts: processedProducts.map(product => ({
+            id: product.id,
+            title: product.title,
+            price: product.price,
+            description: product.description,
+            url: product.url,
+            variants: product.variants,
+            specifications: product.specifications,
+            images: product.images,
+            available: product.available,
+            tags: product.tags,
+            vendor: product.vendor,
+            productType: product.productType
+          }))
+        };
+        
+        // Add enhanced content to conversation history
+        await addToolResultToHistory(conversationHistory, toolUseId, enhancedContent, conversationId);
+        return;
+      }
     }
 
-    addToolResultToHistory(conversationHistory, toolUseId, toolUseResponse.content, conversationId);
+    // For non-product tools or if product processing didn't enhance content
+    await addToolResultToHistory(conversationHistory, toolUseId, toolUseResponse.content, conversationId);
   };
 
   /**
-   * Processes product search results
+   * Processes product search results and extracts complete product information
    * @param {Object} toolUseResponse - The response from the tool
-   * @returns {Array} Processed product data
+   * @returns {Array} Processed product data with all available details
    */
   const processProductSearchResult = (toolUseResponse) => {
     try {
-      console.log("Processing product search result");
+      console.log("Processing product search result with comprehensive data extraction");
       let products = [];
 
       if (toolUseResponse.content && toolUseResponse.content.length > 0) {
@@ -70,11 +115,14 @@ export function createToolService() {
           }
 
           if (responseData?.products && Array.isArray(responseData.products)) {
-            products = responseData.products
-              .slice(0, AppConfig.tools.maxProductsToDisplay)
-              .map(formatProductData);
+            // Process all products with complete data extraction
+            const allProducts = responseData.products.map(formatProductData);
+            
+            // Limit for display purposes but preserve all data
+            products = allProducts.slice(0, AppConfig.tools.maxProductsToDisplay);
 
-            console.log(`Found ${products.length} products to display`);
+            console.log(`Found ${responseData.products.length} total products, displaying ${products.length} with comprehensive details`);
+            console.log(`Product details include: variants, specifications, images, inventory, and metadata`);
           }
         } catch (e) {
           console.error("Error parsing product data:", e);
@@ -89,25 +137,90 @@ export function createToolService() {
   };
 
   /**
-   * Formats a product data object
+   * Formats a product data object with ALL available product details
    * @param {Object} product - Raw product data
-   * @returns {Object} Formatted product data
+   * @returns {Object} Formatted product data with comprehensive information
    */
   const formatProductData = (product) => {
+    // Extract price information
     const price = product.price_range
-      ? `${product.price_range.currency} ${product.price_range.min}`
+      ? `${product.price_range.currency} ${product.price_range.min}${product.price_range.max && product.price_range.max !== product.price_range.min ? ` - ${product.price_range.max}` : ''}`
       : (product.variants && product.variants.length > 0
         ? `${product.variants[0].currency} ${product.variants[0].price}`
         : 'Price not available');
 
-    return {
-      id: product.product_id || `product-${Math.random().toString(36).substring(7)}`,
+    // Extract all variant details
+    const variants = product.variants ? product.variants.map(variant => ({
+      id: variant.id,
+      title: variant.title,
+      price: variant.price,
+      currency: variant.currency,
+      sku: variant.sku,
+      available: variant.available,
+      availableForSale: variant.availableForSale,
+      weight: variant.weight,
+      weightUnit: variant.weightUnit,
+      compareAtPrice: variant.compareAtPrice,
+      selectedOptions: variant.selectedOptions || []
+    })) : [];
+
+    // Extract all images
+    const images = product.images ? product.images.map(img => ({
+      url: img.url || img.src,
+      alt: img.alt || product.title
+    })) : (product.image_url ? [{ url: product.image_url, alt: product.title }] : []);
+
+    // Extract specifications and metadata
+    const specifications = {
+      dimensions: product.dimensions || null,
+      weight: product.weight || null,
+      weightUnit: product.weightUnit || null,
+      materials: product.materials || null,
+      features: product.features || null,
+      vendor: product.vendor || null,
+      productType: product.productType || product.type || null,
+      tags: product.tags || [],
+      collections: product.collections || []
+    };
+
+    // Build comprehensive product object
+    const formattedProduct = {
+      // Basic information
+      id: product.product_id || product.id || `product-${Math.random().toString(36).substring(7)}`,
       title: product.title || 'Product',
       price: price,
-      image_url: product.image_url || '',
-      description: product.description || '',
-      url: product.url || ''
+      description: product.description || product.body_html || '',
+      url: product.url || product.handle ? `/${product.handle}` : '',
+      
+      // Images - include all available images
+      image_url: images.length > 0 ? images[0].url : '',
+      images: images,
+      
+      // Variants - all variant details
+      variants: variants,
+      variantCount: variants.length,
+      
+      // Specifications and metadata
+      specifications: specifications,
+      vendor: specifications.vendor,
+      productType: specifications.productType,
+      tags: specifications.tags,
+      collections: specifications.collections,
+      
+      // Inventory information
+      available: product.available !== undefined ? product.available : null,
+      availableForSale: product.availableForSale !== undefined ? product.availableForSale : null,
+      
+      // Additional metadata
+      handle: product.handle || null,
+      createdAt: product.createdAt || null,
+      updatedAt: product.updatedAt || null
     };
+
+    // Include full raw product data for reference (useful for detailed queries)
+    formattedProduct._raw = product;
+
+    return formattedProduct;
   };
 
   /**

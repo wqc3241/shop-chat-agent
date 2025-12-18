@@ -1,3 +1,4 @@
+import "./env.server.js"; // Ensure environment variables are loaded
 import { PassThrough } from "stream";
 import { renderToPipeableStream } from "react-dom/server";
 import { ServerRouter } from "react-router";
