@@ -248,7 +248,7 @@
         try {
           ShopAIChat.API.streamResponse(userMessage, conversationId, messagesContainer);
         } catch (error) {
-          console.error('Error communicating with Claude API:', error);
+          console.error('Error communicating with OpenAI API:', error);
           ShopAIChat.UI.removeTypingIndicator();
           this.add("Sorry, I couldn't process your request at the moment. Please try again later.", 'assistant', messagesContainer);
         }
