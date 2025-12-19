@@ -9,6 +9,7 @@ import AppConfig from "../services/config.server";
 import { createSseStream } from "../services/streaming.server";
 import { createOpenAIService } from "../services/openai.server";
 import { createToolService } from "../services/tool.server";
+import { getWebSearchTool, executeWebSearch } from "../services/websearch.server";
 
 
 /**
@@ -68,6 +69,7 @@ async function handleChatRequest(request) {
     // Get message data from request body
     const body = await request.json();
     const userMessage = body.message;
+    const currentPageUrl = body.current_page_url || '';
 
     // Validate required message
     if (!userMessage) {
@@ -88,6 +90,7 @@ async function handleChatRequest(request) {
         userMessage,
         conversationId,
         promptType,
+        currentPageUrl,
         stream
       });
     });
@@ -111,6 +114,7 @@ async function handleChatRequest(request) {
  * @param {string} params.userMessage - The user's message
  * @param {string} params.conversationId - The conversation ID
  * @param {string} params.promptType - The prompt type
+ * @param {string} params.currentPageUrl - The current page URL
  * @param {Object} params.stream - Stream manager for sending responses
  */
 async function handleChatSession({
@@ -118,6 +122,7 @@ async function handleChatSession({
   userMessage,
   conversationId,
   promptType,
+  currentPageUrl,
   stream
 }) {
   // #region agent log
@@ -183,8 +188,86 @@ async function handleChatSession({
       };
     });
 
+    // Detect if user is asking about product fitment on a product page
+    const isProductPage = currentPageUrl && currentPageUrl.includes('/products/');
+    const isFitmentQuestion = /fit|fits|compatible|compatibility|will this work|does this fit|will it fit|vehicle|car|truck|suv/i.test(userMessage);
+    
+    // If on a product page and asking about fitment, automatically search for the current product
+    if (isProductPage && isFitmentQuestion && storefrontMcpTools.length > 0) {
+      try {
+        // Extract product handle or ID from URL
+        const urlMatch = currentPageUrl.match(/\/products\/([^?&#]+)/);
+        if (urlMatch) {
+          const productHandle = urlMatch[1];
+          console.log(`Auto-searching for product from current page: ${productHandle}`);
+          
+          // Search for the product using the handle or title
+          const productSearchResult = await mcpClient.callTool(AppConfig.tools.productSearchName, {
+            query: productHandle,
+            context: `User is viewing product page: ${currentPageUrl}. They are asking about fitment/compatibility. Please search for this specific product and provide all details including title, description, tags, and any vehicle compatibility information.`
+          });
+          
+          // If product found, add it to conversation history as context
+          if (productSearchResult && !productSearchResult.error && productSearchResult.content) {
+            // Format product information for AI context
+            let productInfo = '';
+            try {
+              const content = Array.isArray(productSearchResult.content) 
+                ? productSearchResult.content[0]?.text || JSON.stringify(productSearchResult.content)
+                : typeof productSearchResult.content === 'string'
+                ? productSearchResult.content
+                : JSON.stringify(productSearchResult.content);
+              
+              let parsedContent;
+              if (typeof content === 'string') {
+                try {
+                  parsedContent = JSON.parse(content);
+                } catch {
+                  parsedContent = { text: content };
+                }
+              } else {
+                parsedContent = content;
+              }
+              
+              // Extract product details
+              const products = parsedContent?.products || (parsedContent?.text ? JSON.parse(parsedContent.text)?.products : null);
+              if (products && products.length > 0) {
+                const product = products[0];
+                // Extract SKU from variants if available
+                const sku = product.variants && product.variants.length > 0 
+                  ? product.variants[0].sku || product.variants.map(v => v.sku).filter(Boolean).join(', ')
+                  : product.sku || 'N/A';
+                
+                productInfo = `Product Title: ${product.title || 'N/A'}\nProduct SKU: ${sku}\nProduct Description: ${product.description || product.body_html || 'N/A'}\nProduct Tags: ${(product.tags || []).join(', ')}\nProduct URL: ${product.url || currentPageUrl}\nProduct Specifications: ${JSON.stringify(product.specifications || {})}\nAll Product Details: ${JSON.stringify(product)}`;
+              } else {
+                productInfo = JSON.stringify(parsedContent);
+              }
+            } catch (error) {
+              console.error('Error formatting product context:', error);
+              productInfo = JSON.stringify(productSearchResult.content);
+            }
+            
+            const productContext = {
+              role: 'user',
+              content: [{
+                type: 'text',
+                text: `[AUTO-SEARCHED PRODUCT CONTEXT] The customer is viewing this product page: ${currentPageUrl}. I automatically searched for and found the product details:\n\n${productInfo}\n\nPlease use this product information to answer the customer's question about fitment/compatibility.`
+              }]
+            };
+            
+            // Add product context before the user's question
+            conversationHistory.push(productContext);
+            console.log('Added product context to conversation history');
+          }
+        }
+      } catch (error) {
+        console.error('Error auto-searching for product:', error);
+        // Continue with normal flow even if auto-search fails
+      }
+    }
+
     // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.jsx:177',message:'Before streamConversation call',data:{conversationHistoryLength:conversationHistory.length,toolsCount:mcpClient.tools.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.jsx:177',message:'Before streamConversation call',data:{conversationHistoryLength:conversationHistory.length,toolsCount:mcpClient.tools.length,isProductPage,isFitmentQuestion,currentPageUrl},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
     // #endregion
 
     // Execute the conversation stream
@@ -232,8 +315,103 @@ async function handleChatSession({
           // Handle tool use requests
           onToolUse: async (content) => {
             const toolName = content.name;
-            const toolArgs = content.input;
+            let toolArgs = content.input || {};
             const toolUseId = content.id;
+
+            // Prevent redundant search if we already have auto-searched product context
+            if (toolName === AppConfig.tools.productSearchName) {
+              // Check if we already have auto-searched product context
+              const hasAutoSearchedContext = conversationHistory.some(msg => {
+                if (msg.role === 'user' && Array.isArray(msg.content)) {
+                  return msg.content.some(block => 
+                    block.type === 'text' && 
+                    typeof block.text === 'string' && 
+                    block.text.includes('[AUTO-SEARCHED PRODUCT CONTEXT]')
+                  );
+                }
+                return false;
+              });
+              
+              // If we have auto-searched context and this is a fitment question, skip the tool call
+              // and use the existing context instead
+              if (hasAutoSearchedContext && isFitmentQuestion) {
+                console.log('Skipping redundant search - using auto-searched product context');
+                // Add a tool result message indicating we're using existing context
+                await toolService.addToolResultToHistory(
+                  conversationHistory,
+                  toolUseId,
+                  { message: 'Using auto-searched product context - no additional search needed', skipSearch: true },
+                  conversationId
+                );
+                // Return early without calling the tool
+                // The AI should use the context that's already in the conversation
+                stream.sendMessage({ type: 'new_message' });
+                return;
+              }
+            }
+
+            // Fix missing required parameters for search_shop_catalog tool
+            if (toolName === AppConfig.tools.productSearchName) {
+              // If query is missing, extract from user's message or current page
+              if (!toolArgs.query || toolArgs.query === '') {
+                // First, try to extract from current page URL if on product page
+                if (currentPageUrl && currentPageUrl.includes('/products/')) {
+                  const urlMatch = currentPageUrl.match(/\/products\/([^?&#]+)/);
+                  if (urlMatch) {
+                    toolArgs.query = urlMatch[1]; // Use product handle
+                  }
+                }
+                
+                // If still no query, get from user's message
+                if (!toolArgs.query || toolArgs.query === '') {
+                  const userMessages = conversationHistory.filter(msg => msg.role === 'user');
+                  if (userMessages.length > 0) {
+                    const lastUserMessage = userMessages[userMessages.length - 1];
+                    let messageText = '';
+                    
+                    if (typeof lastUserMessage.content === 'string') {
+                      messageText = lastUserMessage.content;
+                    } else if (Array.isArray(lastUserMessage.content)) {
+                      messageText = lastUserMessage.content
+                        .filter(block => block.type === 'text')
+                        .map(block => block.text || block.content)
+                        .join(' ');
+                    }
+                    
+                    if (messageText) {
+                      toolArgs.query = messageText;
+                    }
+                  }
+                }
+              }
+              
+              // If context is missing, try to extract from current page or set default
+              if (!toolArgs.context || toolArgs.context === '') {
+                // Get the most recent user message for context
+                const userMessages = conversationHistory.filter(msg => msg.role === 'user');
+                let contextText = 'General product inquiry';
+                
+                if (userMessages.length > 0) {
+                  const lastUserMessage = userMessages[userMessages.length - 1];
+                  if (typeof lastUserMessage.content === 'string') {
+                    contextText = lastUserMessage.content;
+                  } else if (Array.isArray(lastUserMessage.content)) {
+                    contextText = lastUserMessage.content
+                      .filter(block => block.type === 'text')
+                      .map(block => block.text || block.content)
+                      .join(' ');
+                  }
+                }
+                
+                // Build comprehensive context
+                let contextParts = [];
+                if (currentPageUrl && currentPageUrl.includes('/products/')) {
+                  contextParts.push(`User is viewing product page: ${currentPageUrl}`);
+                }
+                contextParts.push(contextText);
+                toolArgs.context = contextParts.join('. ');
+              }
+            }
 
             const toolUseMessage = `Calling tool: ${toolName} with arguments: ${JSON.stringify(toolArgs)}`;
 
@@ -242,8 +420,13 @@ async function handleChatSession({
               tool_use_message: toolUseMessage
             });
 
-            // Call the tool
-            const toolUseResponse = await mcpClient.callTool(toolName, toolArgs);
+            // Call the tool (handle web search separately)
+            let toolUseResponse;
+            if (toolName === 'web_search') {
+              toolUseResponse = await executeWebSearch(toolArgs);
+            } else {
+              toolUseResponse = await mcpClient.callTool(toolName, toolArgs);
+            }
 
             // Handle tool response based on success/error
             if (toolUseResponse.error) {

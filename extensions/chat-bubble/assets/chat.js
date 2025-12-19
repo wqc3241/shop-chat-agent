@@ -478,7 +478,8 @@
           const requestBody = JSON.stringify({
             message: userMessage,
             conversation_id: conversationId,
-            prompt_type: promptType
+            prompt_type: promptType,
+            current_page_url: window.location.href
           });
 
           const streamUrl = 'https://localhost:3458/chat';
@@ -498,13 +499,8 @@
           const decoder = new TextDecoder();
           let buffer = '';
 
-          // Create initial message element
-          let messageElement = document.createElement('div');
-          messageElement.classList.add('shop-ai-message', 'assistant');
-          messageElement.textContent = '';
-          messageElement.dataset.rawText = '';
-          messagesContainer.appendChild(messageElement);
-          currentMessageElement = messageElement;
+          // Don't create initial message element yet - wait for first chunk or new_message event
+          let currentMessageElement = null;
 
           // Process the stream
           while (true) {
@@ -553,6 +549,15 @@
 
           case 'chunk':
             ShopAIChat.UI.removeTypingIndicator();
+            // Create message element on first chunk if it doesn't exist
+            if (!currentMessageElement) {
+              currentMessageElement = document.createElement('div');
+              currentMessageElement.classList.add('shop-ai-message', 'assistant');
+              currentMessageElement.textContent = '';
+              currentMessageElement.dataset.rawText = '';
+              messagesContainer.appendChild(currentMessageElement);
+              updateCurrentElement(currentMessageElement);
+            }
             currentMessageElement.dataset.rawText += data.chunk;
             currentMessageElement.textContent = currentMessageElement.dataset.rawText;
             ShopAIChat.UI.scrollToBottom();
@@ -596,18 +601,30 @@
             break;
 
           case 'new_message':
-            ShopAIChat.Formatting.formatMessageContent(currentMessageElement);
-            ShopAIChat.UI.showTypingIndicator();
+            // Only format and create new element if current element has content
+            if (currentMessageElement && currentMessageElement.dataset.rawText && currentMessageElement.dataset.rawText.trim() !== '') {
+              ShopAIChat.Formatting.formatMessageContent(currentMessageElement);
+              ShopAIChat.UI.showTypingIndicator();
 
-            // Create new message element for the next response
-            const newMessageElement = document.createElement('div');
-            newMessageElement.classList.add('shop-ai-message', 'assistant');
-            newMessageElement.textContent = '';
-            newMessageElement.dataset.rawText = '';
-            messagesContainer.appendChild(newMessageElement);
+              // Create new message element for the next response
+              const newMessageElement = document.createElement('div');
+              newMessageElement.classList.add('shop-ai-message', 'assistant');
+              newMessageElement.textContent = '';
+              newMessageElement.dataset.rawText = '';
+              messagesContainer.appendChild(newMessageElement);
 
-            // Update the current element reference
-            updateCurrentElement(newMessageElement);
+              // Update the current element reference
+              updateCurrentElement(newMessageElement);
+            } else if (!currentMessageElement) {
+              // If no current element exists, create one
+              const newMessageElement = document.createElement('div');
+              newMessageElement.classList.add('shop-ai-message', 'assistant');
+              newMessageElement.textContent = '';
+              newMessageElement.dataset.rawText = '';
+              messagesContainer.appendChild(newMessageElement);
+              updateCurrentElement(newMessageElement);
+              ShopAIChat.UI.showTypingIndicator();
+            }
             break;
 
           case 'content_block_complete':
