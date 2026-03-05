@@ -151,22 +151,40 @@ async function handleChatSession({
     // Send conversation ID to client
     stream.sendMessage({ type: 'id', conversation_id: conversationId });
 
-    // Connect to MCP servers and get available tools
+    // Connect MCP tools with latency-aware strategy:
+    // - storefront tools are high-priority (product search)
+    // - customer tools are optional for initial response and should not block too long
     let storefrontMcpTools = [], customerMcpTools = [];
 
     try {
       storefrontMcpTools = await mcpClient.connectToStorefrontServer();
-      customerMcpTools = await mcpClient.connectToCustomerServer();
+      console.log(`Connected to storefront MCP with ${storefrontMcpTools.length} tools`);
+    } catch (error) {
+      console.warn('Failed to connect to storefront MCP server, continuing:', error.message);
+    }
 
-      console.log(`Connected to MCP with ${storefrontMcpTools.length} tools`);
+    try {
+      customerMcpTools = await withTimeout(
+        mcpClient.connectToCustomerServer(),
+        1200,
+        'customer MCP connection timed out'
+      );
       console.log(`Connected to customer MCP with ${customerMcpTools.length} tools`);
     } catch (error) {
-      console.warn('Failed to connect to MCP servers, continuing without tools:', error.message);
+      console.warn('Customer MCP unavailable/slow, continuing without it for this turn:', error.message);
+    }
+
+    // Always expose web_search to the model for external/current-info questions.
+    const webSearchTool = getWebSearchTool();
+    if (!mcpClient.tools.some(tool => tool.name === webSearchTool.name)) {
+      mcpClient.tools.push(webSearchTool);
     }
 
     // Prepare conversation state
     let conversationHistory = [];
     let productsToDisplay = [];
+    let shouldReturnProductCardsOnly = false;
+    let explicitSearchStatusMessage = "";
 
     // Save user message to the database
     await saveMessage(conversationId, 'user', userMessage);
@@ -191,6 +209,7 @@ async function handleChatSession({
     // Detect if user is asking about product fitment on a product page
     const isProductPage = currentPageUrl && currentPageUrl.includes('/products/');
     const isFitmentQuestion = /fit|fits|compatible|compatibility|will this work|does this fit|will it fit|vehicle|car|truck|suv/i.test(userMessage);
+    const isExplicitProductSearch = isExplicitProductSearchRequest(userMessage);
     
     // If on a product page and asking about fitment, automatically search for the current product
     if (isProductPage && isFitmentQuestion && storefrontMcpTools.length > 0) {
@@ -264,6 +283,87 @@ async function handleChatSession({
         console.error('Error auto-searching for product:', error);
         // Continue with normal flow even if auto-search fails
       }
+    }
+
+    // If user explicitly asks to find/search products, proactively run catalog search
+    // so this works consistently from any storefront page.
+    if (isExplicitProductSearch && storefrontMcpTools.length > 0 && !(isProductPage && isFitmentQuestion)) {
+      try {
+        const productQuery = extractProductSearchQuery(userMessage);
+        const useFuzzyTopTen = isNonSpecificProductQuery(productQuery);
+        const searchArgs = {
+          query: productQuery,
+          context: [
+            "User explicitly asked to find products in chat.",
+            useFuzzyTopTen ? "Query is broad/non-specific: return broad matches." : "Query is specific: prioritize exact relevance.",
+            currentPageUrl ? `Current page: ${currentPageUrl}` : null,
+            `Original request: ${userMessage}`
+          ].filter(Boolean).join(" ")
+        };
+
+        stream.sendMessage({
+          type: 'tool_use',
+          tool_use_message: `Calling tool: ${AppConfig.tools.productSearchName} with arguments: ${JSON.stringify(searchArgs)}`
+        });
+
+        const proactiveSearchResult = await mcpClient.callTool(AppConfig.tools.productSearchName, searchArgs);
+
+        if (proactiveSearchResult && !proactiveSearchResult.error) {
+          const proactiveProducts = toolService.processProductSearchResult(
+            proactiveSearchResult,
+            useFuzzyTopTen ? 10 : undefined
+          );
+          if (proactiveProducts.length > 0) {
+            productsToDisplay.push(...proactiveProducts);
+            shouldReturnProductCardsOnly = true;
+            explicitSearchStatusMessage = buildShortSearchStatusMessage(productQuery, proactiveProducts);
+
+            const productSummary = proactiveProducts.map((product, index) => (
+              `${index + 1}. ${product.title} | ${product.price} | ${product.url || 'No URL'}`
+            )).join('\n');
+
+            conversationHistory.push({
+              role: 'user',
+              content: [{
+                type: 'text',
+                text: `[AUTO-SEARCHED PRODUCT RESULTS] The user asked to find products with query "${productQuery}". Use these results to answer naturally and helpfully.\n\n${productSummary}`
+              }]
+            });
+          }
+          else {
+            shouldReturnProductCardsOnly = true;
+            explicitSearchStatusMessage = "I couldn't find an exact match. Try a different keyword and I'll search again.";
+          }
+        } else {
+          console.warn('Proactive product search failed:', proactiveSearchResult?.error);
+          shouldReturnProductCardsOnly = true;
+          explicitSearchStatusMessage = "I couldn't find results this time. Please try a different keyword.";
+        }
+      } catch (error) {
+        console.error('Error in proactive product search:', error);
+        shouldReturnProductCardsOnly = true;
+        explicitSearchStatusMessage = "Something went wrong during search. Please try again in a moment.";
+      }
+    }
+
+    // For explicit product-finding requests, return a short status message
+    // plus product cards (if any), without generating long assistant text.
+    if (isExplicitProductSearch && shouldReturnProductCardsOnly) {
+      if (explicitSearchStatusMessage) {
+        stream.sendMessage({
+          type: 'chunk',
+          chunk: explicitSearchStatusMessage
+        });
+        stream.sendMessage({ type: 'message_complete' });
+      }
+      stream.sendMessage({ type: 'end_turn' });
+      if (productsToDisplay.length > 0) {
+        stream.sendMessage({
+          type: 'product_results',
+          products: productsToDisplay
+        });
+      }
+      return;
     }
 
     // #region agent log
@@ -582,3 +682,93 @@ function getSseHeaders(request) {
     "Access-Control-Allow-Headers": "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version"
   };
 }
+
+function isExplicitProductSearchRequest(message = "") {
+  if (!message || typeof message !== "string") return false;
+  const text = message.trim().toLowerCase();
+  if (!text) return false;
+
+  const searchIntentPattern = /(?:\bfind\b|\bsearch\b|\blook for\b|\bshow me\b|\brecommend\b|\bneed\b.*\bproduct\b|帮我找|找一下|找个|搜索|查找|推荐.*产品|想买)/i;
+  return searchIntentPattern.test(text);
+}
+
+function extractProductSearchQuery(message = "") {
+  if (!message || typeof message !== "string") return "";
+
+  let query = message.trim();
+
+  // Remove common lead-in phrases (EN + ZH), keep the actual product keywords.
+  query = query
+    .replace(/^(please\s+)?(can you\s+)?(could you\s+)?(help me\s+)?/i, "")
+    .replace(/^(i want to\s+|i'd like to\s+)?(find|search|look for|show me|recommend)\s+/i, "")
+    .replace(/^(帮我|请帮我)?(找一下|找个|找|搜索|查找|推荐)\s*/i, "")
+    .replace(/^(products?|product)\s*/i, "")
+    .replace(/[?？!！。]+$/g, "")
+    .trim();
+
+  return query || message.trim();
+}
+
+function isNonSpecificProductQuery(query = "") {
+  if (!query || typeof query !== "string") return true;
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return true;
+
+  const words = normalized.split(/\s+/).filter(Boolean);
+  if (words.length <= 1) return true;
+  if (normalized.length < 8) return true;
+
+  const genericTerms = [
+    "product", "products", "item", "items", "something", "anything",
+    "配件", "产品", "东西", "推荐", "找"
+  ];
+  const nonGenericWordCount = words.filter((word) => !genericTerms.includes(word)).length;
+
+  return nonGenericWordCount <= 1;
+}
+
+function buildShortSearchStatusMessage(query = "", products = []) {
+  if (!Array.isArray(products) || products.length === 0) {
+    return "I couldn't find matching products. Try a different keyword and I'll search again.";
+  }
+
+  if (hasLikelyExactMatch(query, products)) {
+    return "Found matches — click a product card below to view details.";
+  }
+
+  return "I couldn't find an exact match, but I found similar products below.";
+}
+
+function hasLikelyExactMatch(query = "", products = []) {
+  if (!query || typeof query !== "string" || !Array.isArray(products)) return false;
+
+  const normalizedQuery = query.toLowerCase().trim();
+  if (!normalizedQuery) return false;
+
+  // Fast path: full query appears in title
+  const fullMatch = products.some((product) => {
+    const title = (product?.title || "").toLowerCase();
+    return title.includes(normalizedQuery);
+  });
+  if (fullMatch) return true;
+
+  // Token overlap path
+  const queryTokens = normalizedQuery.split(/\s+/).filter((token) => token.length >= 2);
+  if (queryTokens.length === 0) return false;
+
+  return products.some((product) => {
+    const title = (product?.title || "").toLowerCase();
+    const matched = queryTokens.filter((token) => title.includes(token)).length;
+    return matched >= Math.min(2, queryTokens.length);
+  });
+}
+
+function withTimeout(promise, timeoutMs, timeoutMessage = "Operation timed out") {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs)
+    ),
+  ]);
+}
+

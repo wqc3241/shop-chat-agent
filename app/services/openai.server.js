@@ -142,7 +142,11 @@ export function createOpenAIService(apiKey = process.env.OPENAI_API_KEY) {
     // #endregion
     try {
       // Get system prompt from configuration or use default
-      const systemInstruction = getSystemPrompt(promptType);
+      const systemInstruction = [
+        getSystemPrompt(promptType),
+        "Use the web_search tool when a question needs current events, external facts, or information not in store/catalog data.",
+        "Important: Keep every assistant response under 200 characters. Be concise and clear."
+      ].join("\n\n");
 
       // Convert messages to OpenAI format
       // #region agent log

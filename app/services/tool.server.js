@@ -98,7 +98,7 @@ export function createToolService() {
    * @param {Object} toolUseResponse - The response from the tool
    * @returns {Array} Processed product data with all available details
    */
-  const processProductSearchResult = (toolUseResponse) => {
+  const processProductSearchResult = (toolUseResponse, maxProductsOverride) => {
     try {
       console.log("Processing product search result with comprehensive data extraction");
       let products = [];
@@ -119,7 +119,10 @@ export function createToolService() {
             const allProducts = responseData.products.map(formatProductData);
             
             // Limit for display purposes but preserve all data
-            products = allProducts.slice(0, AppConfig.tools.maxProductsToDisplay);
+            const maxProducts = Number.isInteger(maxProductsOverride) && maxProductsOverride > 0
+              ? maxProductsOverride
+              : AppConfig.tools.maxProductsToDisplay;
+            products = allProducts.slice(0, maxProducts);
 
             console.log(`Found ${responseData.products.length} total products, displaying ${products.length} with comprehensive details`);
             console.log(`Product details include: variants, specifications, images, inventory, and metadata`);
@@ -183,6 +186,8 @@ export function createToolService() {
       collections: product.collections || []
     };
 
+    const productUrl = buildProductUrl(product);
+
     // Build comprehensive product object
     const formattedProduct = {
       // Basic information
@@ -190,7 +195,7 @@ export function createToolService() {
       title: product.title || 'Product',
       price: price,
       description: product.description || product.body_html || '',
-      url: product.url || product.handle ? `/${product.handle}` : '',
+      url: productUrl,
       
       // Images - include all available images
       image_url: images.length > 0 ? images[0].url : '',
@@ -212,7 +217,7 @@ export function createToolService() {
       availableForSale: product.availableForSale !== undefined ? product.availableForSale : null,
       
       // Additional metadata
-      handle: product.handle || null,
+      handle: product.handle || product?._raw?.handle || null,
       createdAt: product.createdAt || null,
       updatedAt: product.updatedAt || null
     };
@@ -221,6 +226,50 @@ export function createToolService() {
     formattedProduct._raw = product;
 
     return formattedProduct;
+  };
+
+  const buildProductUrl = (product) => {
+    const directUrl =
+      product.url ||
+      product.onlineStoreUrl ||
+      product.productUrl ||
+      product.product_url ||
+      "";
+
+    if (typeof directUrl === "string" && directUrl.trim() !== "") {
+      return directUrl;
+    }
+
+    const handle =
+      product.handle ||
+      product.product_handle ||
+      product?._raw?.handle ||
+      product?._raw?.product_handle ||
+      product.slug ||
+      "";
+
+    if (typeof handle === "string" && handle.trim() !== "") {
+      return `/products/${handle.trim()}`;
+    }
+
+    const title = typeof product.title === "string" ? product.title.trim() : "";
+    if (title) {
+      const inferredHandle = slugifyToHandle(title);
+      if (inferredHandle) return `/products/${inferredHandle}`;
+    }
+
+    return "";
+  };
+
+  const slugifyToHandle = (value) => {
+    if (!value || typeof value !== "string") return "";
+    return value
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[^\w\s-]/g, "")
+      .trim()
+      .replace(/[\s_-]+/g, "-")
+      .replace(/^-+|-+$/g, "");
   };
 
   /**

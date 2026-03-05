@@ -36,6 +36,9 @@
           messagesContainer: container.querySelector('.shop-ai-chat-messages')
         };
 
+        // Initialize optional voice input support
+        ShopAIChat.Voice.init(this.elements);
+
         // Detect mobile device
         this.isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
@@ -63,6 +66,7 @@
         // Send message when pressing Enter in input
         chatInput.addEventListener('keypress', (e) => {
           if (e.key === 'Enter' && chatInput.value.trim() !== '') {
+            ShopAIChat.Voice.stopListening();
             ShopAIChat.Message.send(chatInput, messagesContainer);
 
             // On mobile, handle keyboard
@@ -76,6 +80,7 @@
         // Send message when clicking send button
         sendButton.addEventListener('click', () => {
           if (chatInput.value.trim() !== '') {
+            ShopAIChat.Voice.stopListening();
             ShopAIChat.Message.send(chatInput, messagesContainer);
 
             // On mobile, focus input after sending
@@ -141,6 +146,7 @@
         const { chatWindow, chatInput } = this.elements;
 
         chatWindow.classList.remove('active');
+        ShopAIChat.Voice.stopListening();
 
         // On mobile, blur input to hide keyboard and enable body scrolling
         if (this.isMobile) {
@@ -220,6 +226,102 @@
         }
 
         this.scrollToBottom();
+      }
+    },
+
+    /**
+     * Voice input (speech-to-text) functionality
+     */
+    Voice: {
+      recognition: null,
+      isSupported: false,
+      isListening: false,
+      button: null,
+
+      init: function(uiElements) {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition || !uiElements || !uiElements.chatInput || !uiElements.sendButton) {
+          return;
+        }
+
+        this.isSupported = true;
+        this.createVoiceButton(uiElements);
+
+        this.recognition = new SpeechRecognition();
+        this.recognition.lang = navigator.language || 'en-US';
+        this.recognition.continuous = false;
+        this.recognition.interimResults = true;
+        this.recognition.maxAlternatives = 1;
+
+        this.recognition.onstart = () => {
+          this.isListening = true;
+          this.updateButtonState();
+        };
+
+        this.recognition.onend = () => {
+          this.isListening = false;
+          this.updateButtonState();
+        };
+
+        this.recognition.onerror = (event) => {
+          console.warn('Voice input error:', event.error);
+          this.isListening = false;
+          this.updateButtonState();
+        };
+
+        this.recognition.onresult = (event) => {
+          let transcript = '';
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            transcript += event.results[i][0].transcript;
+          }
+          uiElements.chatInput.value = transcript.trim();
+        };
+      },
+
+      createVoiceButton: function(uiElements) {
+        const voiceButton = document.createElement('button');
+        voiceButton.type = 'button';
+        voiceButton.className = 'shop-ai-chat-voice';
+        voiceButton.setAttribute('aria-label', 'Use voice input');
+        voiceButton.title = 'Use voice input';
+        voiceButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>';
+
+        voiceButton.addEventListener('click', () => {
+          if (this.isListening) {
+            this.stopListening();
+          } else {
+            this.startListening();
+          }
+        });
+
+        const inputWrapper = uiElements.sendButton.parentElement;
+        inputWrapper.insertBefore(voiceButton, uiElements.sendButton);
+        this.button = voiceButton;
+      },
+
+      startListening: function() {
+        if (!this.isSupported || !this.recognition || this.isListening) return;
+        try {
+          this.recognition.start();
+        } catch (error) {
+          console.warn('Unable to start voice input:', error);
+        }
+      },
+
+      stopListening: function() {
+        if (!this.isSupported || !this.recognition || !this.isListening) return;
+        try {
+          this.recognition.stop();
+        } catch (error) {
+          console.warn('Unable to stop voice input:', error);
+        }
+      },
+
+      updateButtonState: function() {
+        if (!this.button) return;
+        this.button.classList.toggle('listening', this.isListening);
+        this.button.title = this.isListening ? 'Stop voice input' : 'Use voice input';
+        this.button.setAttribute('aria-label', this.isListening ? 'Stop voice input' : 'Use voice input');
       }
     },
 
@@ -482,7 +584,7 @@
             current_page_url: window.location.href
           });
 
-          const streamUrl = 'https://localhost:3458/chat';
+          const streamUrl = 'http://localhost:3458/chat';
           const shopId = window.shopId;
 
           const response = await fetch(streamUrl, {
@@ -647,7 +749,7 @@
           messagesContainer.appendChild(loadingMessage);
 
           // Fetch history from the server
-          const historyUrl = `https://localhost:3458/chat?history=true&conversation_id=${encodeURIComponent(conversationId)}`;
+          const historyUrl = `http://localhost:3458/chat?history=true&conversation_id=${encodeURIComponent(conversationId)}`;
           console.log('Fetching history from:', historyUrl);
 
           const response = await fetch(historyUrl, {
@@ -796,7 +898,7 @@
           attemptCount++;
 
           try {
-            const tokenUrl = 'https://localhost:3458/auth/token-status?conversation_id=' +
+            const tokenUrl = 'http://localhost:3458/auth/token-status?conversation_id=' +
               encodeURIComponent(conversationId);
             const response = await fetch(tokenUrl);
 
@@ -840,6 +942,40 @@
      * Product-related functionality
      */
     Product: {
+      getProductUrl: function(product) {
+        if (!product) return '';
+
+        const directUrl = product.url || product.onlineStoreUrl || product.productUrl || product.product_url;
+        if (typeof directUrl === 'string' && directUrl.trim() !== '') {
+          return directUrl;
+        }
+
+        const handle = product.handle || product.product_handle || product.slug;
+        if (typeof handle === 'string' && handle.trim() !== '') {
+          return `/products/${handle.trim()}`;
+        }
+
+        if (typeof product.title === 'string' && product.title.trim() !== '') {
+          const inferredHandle = this.slugifyToHandle(product.title);
+          if (inferredHandle) {
+            return `/products/${inferredHandle}`;
+          }
+        }
+
+        return '';
+      },
+
+      slugifyToHandle: function(value) {
+        if (!value || typeof value !== 'string') return '';
+        return value
+          .toLowerCase()
+          .normalize('NFKD')
+          .replace(/[^\w\s-]/g, '')
+          .trim()
+          .replace(/[\s_-]+/g, '-')
+          .replace(/^-+|-+$/g, '');
+      },
+
       /**
        * Create a product card element
        * @param {Object} product - Product data
@@ -848,6 +984,7 @@
       createCard: function(product) {
         const card = document.createElement('div');
         card.classList.add('shop-ai-product-card');
+        const productUrl = this.getProductUrl(product);
 
         // Create image container
         const imageContainer = document.createElement('div');
@@ -874,10 +1011,9 @@
         title.textContent = product.title;
 
         // If product has a URL, make the title a link
-        if (product.url) {
+        if (productUrl) {
           const titleLink = document.createElement('a');
-          titleLink.href = product.url;
-          titleLink.target = '_blank';
+          titleLink.href = productUrl;
           titleLink.textContent = product.title;
           title.textContent = '';
           title.appendChild(titleLink);
@@ -898,7 +1034,10 @@
         button.dataset.productId = product.id;
 
         // Add click handler for the button
-        button.addEventListener('click', function() {
+        button.addEventListener('click', function(e) {
+          // Stop event propagation to prevent triggering card click
+          e.stopPropagation();
+          
           // Send message to add this product to cart
           const input = document.querySelector('.shop-ai-chat-input input');
           if (input) {
@@ -913,6 +1052,19 @@
 
         info.appendChild(button);
         card.appendChild(info);
+
+        // Make the entire card clickable to view product details
+        if (productUrl) {
+          card.classList.add('shop-ai-product-card-clickable');
+          card.addEventListener('click', function(e) {
+            // Don't navigate if clicking on the button or a link
+            if (e.target.closest('.shop-ai-add-to-cart') || e.target.closest('a')) {
+              return;
+            }
+            // Navigate to product URL
+            window.location.href = productUrl;
+          });
+        }
 
         return card;
       }

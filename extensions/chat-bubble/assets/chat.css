@@ -357,6 +357,31 @@
     cursor: pointer;
   }
 
+  .shop-ai-chat-voice {
+    background-color: #f3f3f8;
+    color: #5046e4;
+    border: 1px solid #e2e2ef;
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .shop-ai-chat-voice:hover {
+    background-color: #e9e9f7;
+  }
+
+  .shop-ai-chat-voice.listening {
+    background-color: #ef4444;
+    border-color: #ef4444;
+    color: #fff;
+    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.2);
+  }
+
   .shop-ai-typing-indicator {
     display: flex;
     align-items: center;
@@ -459,6 +484,10 @@
     display: block;
     border: 1px solid #eaeaea;
     position: relative;
+  }
+  
+  .shop-ai-product-card-clickable {
+    cursor: pointer;
   }
   
   .shop-ai-product-card:hover {
@@ -580,6 +609,11 @@
     }
     
     .shop-ai-chat-send {
+      width: 36px;
+      height: 36px;
+    }
+
+    .shop-ai-chat-voice {
       width: 36px;
       height: 36px;
     }
