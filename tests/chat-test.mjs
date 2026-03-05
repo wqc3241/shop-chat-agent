@@ -14,6 +14,7 @@
  *   --verbose    Show full response text
  *   --timeout    Max response time in ms (default: 10000)
  *   --target     Target TTFT in ms (default: 2000)
+ *   --max-chars  Max response length in chars (default: 800)
  */
 import { config } from "dotenv";
 import { resolve, dirname } from "path";
@@ -36,6 +37,7 @@ const USE_JUDGE = flag("judge");
 const VERBOSE = flag("verbose");
 const TIMEOUT_MS = parseInt(param("timeout", "10000"), 10);
 const TARGET_TTFT_MS = parseInt(param("target", "2000"), 10);
+const MAX_RESPONSE_CHARS = parseInt(param("max-chars", "800"), 10);
 
 // ── Store config ────────────────────────────────────────────────────
 const STORE_DOMAIN = "https://dev-nlp-brochure.myshopify.com";
@@ -46,36 +48,38 @@ const TEST_CASES = [
     name: "Simple greeting",
     message: "Hello, what can you help me with?",
     current_page_url: `${STORE_DOMAIN}/`,
-    judgePrompt: "The response should be a friendly greeting explaining what the assistant can help with (products, orders, etc). Is the response appropriate?",
+    judgePrompt: "The response should be a friendly greeting explaining what the assistant can help with (products, orders, etc). Is the response appropriate AND concise (under 4 sentences)?",
     expectToolCall: false,
+    maxChars: 400,
   },
   {
     name: "Product search",
     message: "Show me brake pads",
     current_page_url: `${STORE_DOMAIN}/`,
-    judgePrompt: "The assistant should either show product results or mention searching the catalog. Does it attempt to help find brake pads?",
+    judgePrompt: "The assistant should either show product results or mention searching the catalog. Does it attempt to help find brake pads? Is the text portion concise (not repeating product details already shown in cards)?",
     expectToolCall: true,
   },
   {
     name: "Fitment question on product page",
     message: "Does this fit my 2026 Dodge Challenger?",
     current_page_url: `${STORE_DOMAIN}/products/air-lift-11-23-dodge-charger-15-23-dodge-challenger-performance-rear-kit`,
-    judgePrompt: "The assistant should address fitment/compatibility for a 2026 Dodge Challenger. It should either confirm, deny, or explain it needs to check. Does it address the fitment question?",
+    judgePrompt: "The assistant should address fitment/compatibility for a 2026 Dodge Challenger. It should give a direct yes/no answer with a brief explanation (1-3 sentences), not a lengthy essay. Does it address the fitment question concisely?",
     expectToolCall: true,
   },
   {
     name: "General knowledge question",
     message: "What is your return policy?",
     current_page_url: `${STORE_DOMAIN}/`,
-    judgePrompt: "The assistant should attempt to answer about return policy (may use tools or general knowledge). Is the response relevant to return policies?",
+    judgePrompt: "The assistant should attempt to answer about return policy (may use tools or general knowledge). Is the response relevant to return policies AND concise (not overly verbose)?",
     expectToolCall: false,
   },
   {
     name: "Follow-up question (new conversation)",
     message: "Do you have anything cheaper?",
     current_page_url: `${STORE_DOMAIN}/collections/all`,
-    judgePrompt: "Without prior context, the assistant should ask what product category the customer is looking for, or attempt to search. Is the response reasonable for a question without context?",
+    judgePrompt: "Without prior context, the assistant should ask what product category the customer is looking for, or attempt to search. Is the response reasonable and brief (1-3 sentences)?",
     expectToolCall: false,
+    maxChars: 400,
   },
 ];
 
@@ -279,9 +283,12 @@ async function main() {
     const hasResponse = result.fullResponseText.length > 0;
     const hasError = !!result.error;
 
+    const charLimit = tc.maxChars || MAX_RESPONSE_CHARS;
+    const concisePass = result.fullResponseText.length <= charLimit;
+
     console.log(`  TTFT: ${formatMs(result.ttft)} ${ttftPass ? "PASS" : result.ttft === null ? "(no text chunks)" : "FAIL"}`);
     console.log(`  Total: ${formatMs(result.totalTime)}`);
-    console.log(`  Response length: ${result.fullResponseText.length} chars`);
+    console.log(`  Response length: ${result.fullResponseText.length} chars (limit: ${charLimit}) ${concisePass ? "PASS" : "FAIL — TOO LONG"}`);
     console.log(`  Tool calls: ${result.toolCalls.length}`);
 
     if (hasError) {
@@ -305,6 +312,8 @@ async function main() {
       ttft: result.ttft,
       ttftPass,
       totalTime: result.totalTime,
+      responseLen: result.fullResponseText.length,
+      concisePass,
       hasResponse,
       hasError,
       error: result.error,
@@ -322,13 +331,15 @@ async function main() {
   console.log("=".repeat(70));
   console.log();
   console.log(
-    "Test".padEnd(40) +
-    "TTFT".padEnd(10) +
-    "Total".padEnd(10) +
-    "Speed".padEnd(8) +
+    "Test".padEnd(35) +
+    "TTFT".padEnd(9) +
+    "Total".padEnd(9) +
+    "Chars".padEnd(7) +
+    "Speed".padEnd(7) +
+    "Concise".padEnd(9) +
     "Quality".padEnd(8)
   );
-  console.log("-".repeat(76));
+  console.log("-".repeat(84));
 
   let passCount = 0;
   let failCount = 0;
@@ -336,22 +347,25 @@ async function main() {
 
   for (const r of results) {
     const speedStatus = r.hasError ? "ERR" : (r.ttftPass ? "PASS" : "FAIL");
+    const conciseStatus = r.concisePass ? "PASS" : "FAIL";
     const qualityStatus = statusIcon(r.judgePass);
 
     console.log(
-      r.name.padEnd(40) +
-      formatMs(r.ttft).padEnd(10) +
-      formatMs(r.totalTime).padEnd(10) +
-      speedStatus.padEnd(8) +
+      r.name.padEnd(35) +
+      formatMs(r.ttft).padEnd(9) +
+      formatMs(r.totalTime).padEnd(9) +
+      String(r.responseLen).padEnd(7) +
+      speedStatus.padEnd(7) +
+      conciseStatus.padEnd(9) +
       qualityStatus.padEnd(8)
     );
 
-    if (r.ttftPass && (r.judgePass === true || r.judgePass === null)) passCount++;
-    else if (r.hasError || r.ttftPass === false || r.judgePass === false) failCount++;
+    if (r.ttftPass && r.concisePass && (r.judgePass === true || r.judgePass === null)) passCount++;
+    else if (r.hasError || r.ttftPass === false || r.judgePass === false || !r.concisePass) failCount++;
     else skipCount++;
   }
 
-  console.log("-".repeat(76));
+  console.log("-".repeat(84));
   console.log(`Total: ${passCount} passed, ${failCount} failed, ${skipCount} skipped`);
   console.log();
 

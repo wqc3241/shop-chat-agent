@@ -135,7 +135,7 @@ export function createOpenAIService(apiKey = process.env.OPENAI_API_KEY) {
       const parts = [
         getSystemPrompt(promptType),
         "Use the web_search tool when a question needs current events, external facts, or information not in store/catalog data.",
-        "Be concise. For fitment compatibility questions, provide clear details about which products fit and why. For simple questions, keep responses brief.",
+        "IMPORTANT — Keep ALL responses short and concise (2-4 sentences for simple questions, max 6-8 sentences for complex ones). No filler, no redundant greetings, no repeating what the customer said. Get straight to the answer. For fitment questions, state whether it fits and why in 1-2 sentences, then offer alternatives if needed. Use bullet points only when listing multiple products.",
       ];
 
       if (customInstructions && customInstructions.trim()) {

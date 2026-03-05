@@ -9,7 +9,7 @@ export const AppConfig = {
     // Note: Ensure this model name is valid for your OpenAI API access
     // Common valid models: 'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo', 'o1-mini', 'o1-preview'
     defaultModel: 'gpt-5-mini', // If this model doesn't exist, use 'gpt-4o-mini' or 'gpt-3.5-turbo'
-    maxTokens: 1200,
+    maxTokens: 800,
     defaultPromptType: 'standardAssistant',
   },
 

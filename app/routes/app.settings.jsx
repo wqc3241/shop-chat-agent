@@ -5,7 +5,7 @@ import { getChatSettings, saveChatSettings } from "../db.server";
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const settings = await getChatSettings(session.shop);
-  return { settings };
+  return { settings, shop: session.shop };
 };
 
 export const action = async ({ request }) => {
@@ -28,7 +28,8 @@ export const action = async ({ request }) => {
 };
 
 export default function Settings() {
-  const { settings } = useLoaderData();
+  const { settings, shop } = useLoaderData();
+  const storeHandle = shop.replace(".myshopify.com", "");
   const actionData = useActionData();
   const navigation = useNavigation();
   const isSubmitting = navigation.state === "submitting";
@@ -109,7 +110,7 @@ export default function Settings() {
                 <s-banner tone="info">
                   For store policies and FAQs, use the{" "}
                   <s-link
-                    href="https://admin.shopify.com/store/knowledge-base"
+                    href={`https://admin.shopify.com/store/${storeHandle}/content/entries`}
                     target="_blank"
                   >
                     Shopify Knowledge Base

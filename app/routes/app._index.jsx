@@ -33,7 +33,8 @@ function truncate(str, len = 40) {
 }
 
 export default function Dashboard() {
-  const { metrics, conversations } = useLoaderData();
+  const { shop, metrics, conversations } = useLoaderData();
+  const storeHandle = shop.replace(".myshopify.com", "");
   const navigate = useNavigate();
 
   return (
@@ -150,7 +151,7 @@ export default function Dashboard() {
             questions.
           </s-text>
           <s-button
-            href="https://admin.shopify.com/store/knowledge-base"
+            href={`https://admin.shopify.com/store/${storeHandle}/content/entries`}
             target="_blank"
             variant="secondary"
           >
