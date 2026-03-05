@@ -50,9 +50,6 @@ export function createStreamManager(encoder, controller) {
    * @param {Error} error - The error that occurred
    */
   const handleStreamingError = (error) => {
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'streaming.server.js:52',message:'handleStreamingError called',data:{errorMessage:error.message,errorStatus:error.status,errorName:error.name},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-    // #endregion
     console.error('Error processing streaming request:', error);
 
     if (error.status === 401 || error.message.includes('auth') || error.message.includes('key')) {

@@ -13,21 +13,13 @@ import systemPrompts from "../prompts/prompts.json";
  * @returns {Object} OpenAI service with methods for interacting with OpenAI API
  */
 export function createOpenAIService(apiKey = process.env.OPENAI_API_KEY) {
-  // #region agent log
-  fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'openai.server.js:14',message:'createOpenAIService - checking API key',data:{hasApiKeyParam:!!apiKey,hasEnvVar:!!process.env.OPENAI_API_KEY,apiKeyLength:apiKey?.length||0},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-  // #endregion
-  
   // Validate API key before creating client
   if (!apiKey) {
-    const errorMsg = "OpenAI API key is not set. Please set OPENAI_API_KEY in your .env file.";
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'openai.server.js:14',message:'API key validation failed',data:{errorMsg},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-    // #endregion
-    throw new Error(errorMsg);
+    throw new Error("OpenAI API key is not set. Please set OPENAI_API_KEY in your .env file.");
   }
-  
+
   // Initialize OpenAI client
-  const openai = new OpenAI({ 
+  const openai = new OpenAI({
     apiKey: apiKey
   });
 
@@ -38,7 +30,7 @@ export function createOpenAIService(apiKey = process.env.OPENAI_API_KEY) {
    */
   const convertToolsToOpenAIFormat = (tools) => {
     if (!tools || tools.length === 0) return undefined;
-    
+
     return tools.map(tool => ({
       type: "function",
       function: {
@@ -56,11 +48,11 @@ export function createOpenAIService(apiKey = process.env.OPENAI_API_KEY) {
    */
   const convertMessagesToOpenAIFormat = (messages) => {
     const openaiMessages = [];
-    
+
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i];
       let content = msg.content;
-      
+
       // Handle tool_result messages (these come after assistant messages with tool_calls)
       if (Array.isArray(content) && content.some(block => block.type === "tool_result")) {
         // Tool results need to be added as separate "tool" role messages
@@ -69,21 +61,21 @@ export function createOpenAIService(apiKey = process.env.OPENAI_API_KEY) {
             openaiMessages.push({
               role: "tool",
               tool_call_id: block.tool_use_id,
-              content: typeof block.content === "string" 
-                ? block.content 
+              content: typeof block.content === "string"
+                ? block.content
                 : JSON.stringify(block.content)
             });
           }
         }
         continue;
       }
-      
+
       // Handle tool_use messages (convert to assistant message with function call format)
       if (Array.isArray(content) && content.some(block => block.type === "tool_use")) {
         const toolUses = content.filter(block => block.type === "tool_use");
         const textBlocks = content.filter(block => block.type === "text");
         const textContent = textBlocks.map(block => block.text).join("");
-        
+
         openaiMessages.push({
           role: "assistant",
           content: textContent || null,
@@ -98,7 +90,7 @@ export function createOpenAIService(apiKey = process.env.OPENAI_API_KEY) {
         });
         continue;
       }
-      
+
       // Handle regular text content
       // If content is an array, convert to string
       if (Array.isArray(content)) {
@@ -109,14 +101,14 @@ export function createOpenAIService(apiKey = process.env.OPENAI_API_KEY) {
           return "";
         }).join("");
       }
-      
+
       // Convert to OpenAI message format
       openaiMessages.push({
         role: msg.role === "user" ? "user" : "assistant",
         content: typeof content === "string" ? content : JSON.stringify(content)
       });
     }
-    
+
     return openaiMessages;
   };
 
@@ -137,26 +129,17 @@ export function createOpenAIService(apiKey = process.env.OPENAI_API_KEY) {
     promptType = AppConfig.api.defaultPromptType,
     tools
   }, streamHandlers) => {
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'openai.server.js:121',message:'streamConversation entry',data:{messagesCount:messages.length,toolsCount:tools?.length||0,model:AppConfig.api.defaultModel,hasApiKey:!!apiKey},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-    // #endregion
     try {
       // Get system prompt from configuration or use default
       const systemInstruction = [
         getSystemPrompt(promptType),
         "Use the web_search tool when a question needs current events, external facts, or information not in store/catalog data.",
-        "Important: Keep every assistant response under 200 characters. Be concise and clear."
+        "Be concise. For fitment compatibility questions, provide clear details about which products fit and why. For simple questions, keep responses brief."
       ].join("\n\n");
 
       // Convert messages to OpenAI format
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'openai.server.js:131',message:'Before convertMessagesToOpenAIFormat',data:{messagesCount:messages.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-      // #endregion
       const openaiMessages = convertMessagesToOpenAIFormat(messages);
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'openai.server.js:131',message:'After convertMessagesToOpenAIFormat',data:{openaiMessagesCount:openaiMessages.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-      // #endregion
-      
+
       // Add system message
       const messagesWithSystem = [
         { role: "system", content: systemInstruction },
@@ -164,13 +147,7 @@ export function createOpenAIService(apiKey = process.env.OPENAI_API_KEY) {
       ];
 
       // Convert tools to OpenAI format
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'openai.server.js:140',message:'Before convertToolsToOpenAIFormat',data:{toolsCount:tools?.length||0},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
-      // #endregion
       const openaiTools = convertToolsToOpenAIFormat(tools);
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'openai.server.js:140',message:'After convertToolsToOpenAIFormat',data:{openaiToolsCount:openaiTools?.length||0},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
-      // #endregion
 
       // Validate API key
       if (!apiKey) {
@@ -178,9 +155,6 @@ export function createOpenAIService(apiKey = process.env.OPENAI_API_KEY) {
       }
 
       // Create stream
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'openai.server.js:148',message:'Before OpenAI API call',data:{model:AppConfig.api.defaultModel,messagesCount:messagesWithSystem.length,hasTools:!!openaiTools},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-      // #endregion
       const stream = await openai.beta.chat.completions.stream({
         model: AppConfig.api.defaultModel,
         max_completion_tokens: AppConfig.api.maxTokens,
@@ -188,22 +162,14 @@ export function createOpenAIService(apiKey = process.env.OPENAI_API_KEY) {
         tools: openaiTools,
         stream: true
       });
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'openai.server.js:154',message:'After OpenAI API call - stream created',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-      // #endregion
 
     let accumulatedContent = "";
     let toolCalls = [];
-    let chunkCount = 0;
 
     // Process stream chunks
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'openai.server.js:160',message:'Before stream processing loop',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-    // #endregion
     for await (const chunk of stream) {
-      chunkCount++;
       const delta = chunk.choices[0]?.delta;
-      
+
       if (!delta) continue;
 
       // Handle text content
@@ -228,7 +194,7 @@ export function createOpenAIService(apiKey = process.env.OPENAI_API_KEY) {
               }
             };
           }
-          
+
           if (toolCall.function) {
             if (toolCall.function.name) {
               toolCalls[index].function.name = toolCall.function.name;
@@ -241,18 +207,8 @@ export function createOpenAIService(apiKey = process.env.OPENAI_API_KEY) {
       }
     }
 
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'openai.server.js:200',message:'After stream processing loop',data:{chunkCount,accumulatedContentLength:accumulatedContent.length,toolCallsCount:toolCalls.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-    // #endregion
-
     // Get final message
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'openai.server.js:201',message:'Before finalChatCompletion',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-    // #endregion
     const finalMessage = await stream.finalChatCompletion();
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'openai.server.js:201',message:'After finalChatCompletion',data:{finishReason:finalMessage.choices[0]?.finish_reason},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-    // #endregion
 
     // Process complete message
     const assistantMessage = {
@@ -263,10 +219,10 @@ export function createOpenAIService(apiKey = process.env.OPENAI_API_KEY) {
 
     if (streamHandlers.onMessage) {
       // Format message content to match expected format (array of content blocks)
-      const messageContent = assistantMessage.content 
+      const messageContent = assistantMessage.content
         ? [{ type: "text", text: assistantMessage.content }]
         : [];
-      
+
       // If there are tool calls, add them to content
       if (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0) {
         for (const toolCall of assistantMessage.tool_calls) {
@@ -278,7 +234,7 @@ export function createOpenAIService(apiKey = process.env.OPENAI_API_KEY) {
           });
         }
       }
-      
+
       streamHandlers.onMessage({
         role: "assistant",
         content: messageContent
@@ -303,14 +259,11 @@ export function createOpenAIService(apiKey = process.env.OPENAI_API_KEY) {
     return {
       role: "assistant",
       content: assistantMessage.content ? [{ type: "text", text: assistantMessage.content }] : [],
-      stop_reason: finishReason === "stop" || finishReason === "tool_calls" ? "end_turn" : (finishReason || "end_turn")
+      stop_reason: finishReason === "tool_calls" ? "tool_use" : "end_turn"
     };
     } catch (error) {
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'openai.server.js:254',message:'Error caught in streamConversation',data:{errorMessage:error.message,errorStatus:error.status,errorName:error.name,errorStack:error.stack?.substring(0,500)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-      // #endregion
       console.error("Error in streamConversation:", error);
-      
+
       // Provide more detailed error information
       if (error.status === 401) {
         throw new Error("Authentication failed with OpenAI API. Please check your API key.");
@@ -343,4 +296,3 @@ export function createOpenAIService(apiKey = process.env.OPENAI_API_KEY) {
 export default {
   createOpenAIService
 };
-

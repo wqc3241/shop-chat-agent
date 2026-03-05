@@ -27,26 +27,27 @@ The dev server runs on port 3458 (configured in `shopify.web.toml`). On `predev`
 1. **Backend (React Router server)** — handles chat messages, streams responses via SSE, orchestrates OpenAI + MCP tool calls
 2. **Chat UI (Shopify theme extension)** — `extensions/chat-bubble/` provides the storefront-facing chat widget
 
-**Request flow:**
+**Request flow (optimized — parallelized for <2s TTFT):**
 1. Chat bubble (`extensions/chat-bubble/assets/chat.js`) sends POST to `/chat` endpoint
-2. `app/routes/chat.jsx` receives the request, loads conversation history from SQLite
-3. MCP client (`app/mcp-client.js`) connects to Shopify's customer & storefront MCP servers, lists available tools
-4. OpenAI service (`app/services/openai.server.js`) converts MCP tools to OpenAI function-calling format and streams a completion
-5. When OpenAI returns tool calls, they're executed via MCP, results fed back, and the loop continues until a final text response
-6. Response is streamed back to the client via SSE; messages are persisted to the database
+2. `app/routes/chat.jsx` receives the request
+3. **Phase 1 (parallel):** `getCustomerAccountUrls()`, `connectToStorefrontServer()`, and `saveMessage() → getConversationHistory()` run concurrently via `Promise.allSettled`
+4. **Phase 2 (parallel):** Customer MCP connection (500ms timeout) and fitment auto-search (if on product page with fitment question) run concurrently via `Promise.all`
+5. OpenAI service streams a completion with MCP tools converted to OpenAI function-calling format
+6. When OpenAI returns `finish_reason: "tool_calls"`, tools are executed via MCP, results fed back, and the loop continues until a final text response
+7. Response is streamed back to the client via SSE; messages are persisted to the database
 
 **Key services in `app/services/`:**
-- `openai.server.js` — OpenAI client creation, MCP→OpenAI tool conversion, streaming completions, tool use handling
-- `tool.server.js` — Tool response processing, product search result formatting, conversation history management
+- `openai.server.js` — OpenAI client creation, MCP→OpenAI tool conversion, streaming completions. Maps `finish_reason: "tool_calls"` → `stop_reason: "tool_use"` to keep the while loop running for multi-turn tool calls
+- `tool.server.js` — Tool response processing, product search result formatting. Supports fitment-aware mode (`fitment_search:true` in context) with broader results (20 products) and current-product exclusion
 - `streaming.server.js` — SSE StreamManager with backpressure handling
 - `websearch.server.js` — DuckDuckGo web search integration (no API key needed)
-- `config.server.js` — Centralized config (model name, max tokens, prompt type, tool settings)
+- `config.server.js` — Centralized config (model name, max tokens: 1200, prompt type, conversation max history: 20 messages, tool settings including `maxFitmentSearchProducts: 20`)
 
 **Other key files:**
 - `app/mcp-client.js` — MCP protocol client; connects to customer MCP (authenticated) and storefront MCP (public), handles JSON-RPC
 - `app/db.server.js` — Prisma database operations (sessions, conversations, messages, customer tokens, PKCE code verifiers)
 - `app/auth.server.js` — OAuth 2.0 + PKCE flow for customer account access
-- `app/prompts/prompts.json` — System prompts (two variants: `standardAssistant` and `enthusiasticAssistant`)
+- `app/prompts/prompts.json` — System prompts v4.0 (two variants: `standardAssistant` and `enthusiasticAssistant`). Condensed with two-layer fitment search instructions. `enthusiasticAssistant` has a `personalityPrefix` field
 
 ## Database
 
@@ -82,9 +83,39 @@ Required in `.env`:
 
 Default model is set in `app/services/config.server.js` (`AppConfig.api.defaultModel`). The system prompt is selected from `app/prompts/prompts.json` based on `AppConfig.api.defaultPromptType`. To swap LLMs or customize behavior, modify these files.
 
-## No Test Suite
+## Two-Layer Fitment Search
 
-There is currently no test framework configured in this project.
+When a customer asks a fitment/compatibility question on a product page:
+
+1. **Auto-search (Phase 2, parallel):** `chat.jsx` detects the fitment question + product page URL, fires `search_shop_catalog` with the product handle in parallel with customer MCP connection — adds zero extra latency
+2. **Context injection:** Results are injected into conversation history as `[AUTO-SEARCHED PRODUCT CONTEXT]` so the AI has product details (title, SKU, description, tags) before its first turn
+3. **AI answers directly:** The system prompt instructs the AI to read the description for fitment data (format: "Year1-Year2, Make Model") and give a direct answer
+4. **Web verification (Layer 2):** If description data is ambiguous (e.g., year range is close but doesn't cover), the AI uses `web_search` to verify online
+5. **Alternative search:** If the product doesn't fit, the AI searches by PRODUCT CATEGORY ONLY (never vehicle info in query) with `fitment_search:true` context, gets 20 results, excludes current product, and filters by reading descriptions
+6. **Search suppression:** `onToolUse` in `chat.jsx` detects redundant searches (same product handle already in tool results) and skips them
+
+## Response Speed Optimizations
+
+Target: time-to-first-token (TTFT) under 2 seconds. Key changes:
+
+- **Parallelized pre-stream ops** (`chat.jsx`): Phase 1 uses `Promise.allSettled` for independent operations; Phase 2 uses `Promise.all` for customer MCP + fitment auto-search
+- **Conversation history sliding window**: Capped at 20 messages (`AppConfig.conversation.maxHistoryMessages`) to prevent unbounded token growth
+- **Reduced max_completion_tokens**: 2000 → 1200 (most responses well under this)
+- **Condensed system prompts**: Both prompt variants reduced ~40% (verbose formatting guidelines removed, fitment instructions compressed into decision tree)
+- **Removed debug logging**: All `fetch('http://127.0.0.1:7244/...')` debug log blocks removed from `chat.jsx`, `openai.server.js`, `env.server.js`, `streaming.server.js`
+- **Customer MCP timeout**: Reduced to 500ms with graceful fallback
+
+## Testing
+
+`tests/chat-test.mjs` — Conversation testing agent:
+```bash
+node tests/chat-test.mjs                    # Basic speed test (requires dev server running)
+node tests/chat-test.mjs --judge            # With LLM quality judge (uses gpt-4o-mini)
+node tests/chat-test.mjs --verbose          # Show full response text
+node tests/chat-test.mjs --base-url <url>   # Test against custom URL
+node tests/chat-test.mjs --target 3000      # Custom TTFT target in ms
+```
+Tests 5 scenarios: simple greeting, product search, fitment question, return policy, follow-up. Measures TTFT and total response time. `--judge` uses OpenAI to evaluate answer quality.
 
 ## Workflow Rules
 

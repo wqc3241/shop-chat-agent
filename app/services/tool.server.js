@@ -38,12 +38,36 @@ export function createToolService() {
    * @param {Array} conversationHistory - The conversation history
    * @param {Array} productsToDisplay - Array to add product results to
    * @param {string} conversationId - The conversation ID
+   * @param {Object} toolArgs - The arguments passed to the tool call
+   * @param {string|null} currentProductHandle - Handle of the product the user is currently viewing
    */
-  const handleToolSuccess = async (toolUseResponse, toolName, toolUseId, conversationHistory, productsToDisplay, conversationId) => {
+  const handleToolSuccess = async (toolUseResponse, toolName, toolUseId, conversationHistory, productsToDisplay, conversationId, toolArgs = {}, currentProductHandle = null) => {
     // Check if this is a product search result
     if (toolName === AppConfig.tools.productSearchName) {
-      const processedProducts = processProductSearchResult(toolUseResponse);
-      productsToDisplay.push(...processedProducts);
+      // Detect fitment search mode from context
+      const isFitmentSearch = typeof toolArgs?.context === 'string'
+        && toolArgs.context.includes('fitment_search:true');
+
+      const maxProducts = isFitmentSearch
+        ? AppConfig.tools.maxFitmentSearchProducts
+        : undefined;
+
+      let processedProducts = processProductSearchResult(toolUseResponse, maxProducts);
+
+      // Exclude current product when searching for fitment alternatives
+      if (currentProductHandle && isFitmentSearch) {
+        processedProducts = processedProducts.filter(p =>
+          p.handle !== currentProductHandle &&
+          !(p.url && p.url.includes(`/products/${currentProductHandle}`))
+        );
+      }
+
+      // For fitment searches, don't push to productsToDisplay (cards) —
+      // the AI filters by reading descriptions and only mentions confirmed matches.
+      // For normal searches, show product cards as usual.
+      if (!isFitmentSearch) {
+        productsToDisplay.push(...processedProducts);
+      }
       
       // Enhance tool response content with formatted product information for AI reference
       // This ensures the AI has access to all product details in a structured format

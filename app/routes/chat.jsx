@@ -125,53 +125,77 @@ async function handleChatSession({
   currentPageUrl,
   stream
 }) {
-  // #region agent log
-  fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.jsx:115',message:'handleChatSession entry',data:{userMessage,conversationId,promptType,hasOpenAIKey:!!process.env.OPENAI_API_KEY,openAIKeyLength:process.env.OPENAI_API_KEY?.length||0,currentWorkingDir:process.cwd()},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-  // #endregion
-  // Initialize services
-  // #region agent log
-  fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.jsx:127',message:'BEFORE createOpenAIService call',data:{hasOpenAIKey:!!process.env.OPENAI_API_KEY,openAIKeyValue:process.env.OPENAI_API_KEY?.substring(0,15)||'undefined'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-  // #endregion
   const openaiService = createOpenAIService();
   const toolService = createToolService();
 
   // Initialize MCP client
   const shopId = request.headers.get("X-Shopify-Shop-Id");
   const shopDomain = request.headers.get("Origin");
-  const { mcpApiUrl } = await getCustomerAccountUrls(shopDomain, conversationId);
 
-  const mcpClient = new MCPClient(
-    shopDomain,
-    conversationId,
-    shopId,
-    mcpApiUrl,
-  );
+  // Create MCP client without customer endpoint initially (resolved in parallel below)
+  const mcpClient = new MCPClient(shopDomain, conversationId, shopId, null);
 
   try {
     // Send conversation ID to client
     stream.sendMessage({ type: 'id', conversation_id: conversationId });
 
-    // Connect MCP tools with latency-aware strategy:
-    // - storefront tools are high-priority (product search)
-    // - customer tools are optional for initial response and should not block too long
-    let storefrontMcpTools = [], customerMcpTools = [];
+    // Phase 1: Fire independent operations in parallel for faster TTFT
+    // saveMessage → getConversationHistory must be sequential (history needs the saved message)
+    // but they run in parallel with MCP connections
+    const [customerUrlsResult, storefrontResult, dbMessagesResult] = await Promise.allSettled([
+      getCustomerAccountUrls(shopDomain, conversationId),
+      mcpClient.connectToStorefrontServer(),
+      saveMessage(conversationId, 'user', userMessage).then(() => getConversationHistory(conversationId))
+    ]);
 
-    try {
-      storefrontMcpTools = await mcpClient.connectToStorefrontServer();
+    let storefrontMcpTools = [];
+    if (storefrontResult.status === 'fulfilled') {
+      storefrontMcpTools = storefrontResult.value;
       console.log(`Connected to storefront MCP with ${storefrontMcpTools.length} tools`);
-    } catch (error) {
-      console.warn('Failed to connect to storefront MCP server, continuing:', error.message);
+    } else {
+      console.warn('Failed to connect to storefront MCP server:', storefrontResult.reason?.message);
     }
 
-    try {
-      customerMcpTools = await withTimeout(
-        mcpClient.connectToCustomerServer(),
-        1200,
-        'customer MCP connection timed out'
-      );
+    // Detect page context and user intent early (needed for Phase 2 parallelization)
+    const isProductPage = currentPageUrl && currentPageUrl.includes('/products/');
+    const isFitmentQuestion = /fit|fits|compatible|compatibility|will this work|does this fit|will it fit|vehicle|car|truck|suv/i.test(userMessage);
+    const isExplicitProductSearch = isExplicitProductSearchRequest(userMessage);
+    const currentProductHandle = isProductPage
+      ? (currentPageUrl.match(/\/products\/([^?&#]+)/) || [])[1] || null
+      : null;
+
+    // Phase 2: Run customer MCP connection and fitment auto-search in parallel
+    // (both depend on Phase 1 results but are independent of each other)
+    const customerMcpPromise = (async () => {
+      if (customerUrlsResult.status === 'fulfilled' && customerUrlsResult.value?.mcpApiUrl) {
+        mcpClient.customerMcpEndpoint = customerUrlsResult.value.mcpApiUrl;
+        return withTimeout(mcpClient.connectToCustomerServer(), 500, 'customer MCP connection timed out');
+      }
+      return [];
+    })().catch(error => {
+      console.warn('Customer MCP unavailable/slow, continuing without it:', error.message);
+      return [];
+    });
+
+    const fitmentSearchPromise = (async () => {
+      if (isProductPage && isFitmentQuestion && currentProductHandle && storefrontMcpTools.length > 0) {
+        console.log(`Auto-searching for product: ${currentProductHandle}`);
+        const result = await mcpClient.callTool(AppConfig.tools.productSearchName, {
+          query: currentProductHandle,
+          context: `User is viewing product page: ${currentPageUrl}. They are asking about fitment/compatibility.`
+        });
+        if (result && !result.error && result.content) return result;
+      }
+      return null;
+    })().catch(error => {
+      console.warn('Fitment auto-search failed, AI will search via tool call:', error.message);
+      return null;
+    });
+
+    // Wait for both Phase 2 operations
+    const [customerMcpTools, fitmentSearchResult] = await Promise.all([customerMcpPromise, fitmentSearchPromise]);
+    if (customerMcpTools.length > 0) {
       console.log(`Connected to customer MCP with ${customerMcpTools.length} tools`);
-    } catch (error) {
-      console.warn('Customer MCP unavailable/slow, continuing without it for this turn:', error.message);
     }
 
     // Always expose web_search to the model for external/current-info questions.
@@ -181,19 +205,13 @@ async function handleChatSession({
     }
 
     // Prepare conversation state
-    let conversationHistory = [];
     let productsToDisplay = [];
     let shouldReturnProductCardsOnly = false;
     let explicitSearchStatusMessage = "";
 
-    // Save user message to the database
-    await saveMessage(conversationId, 'user', userMessage);
-
-    // Fetch all messages from the database for this conversation
-    const dbMessages = await getConversationHistory(conversationId);
-
     // Format messages for OpenAI API
-    conversationHistory = dbMessages.map(dbMessage => {
+    const dbMessages = dbMessagesResult.status === 'fulfilled' ? dbMessagesResult.value : [];
+    let conversationHistory = dbMessages.map(dbMessage => {
       let content;
       try {
         content = JSON.parse(dbMessage.content);
@@ -206,82 +224,43 @@ async function handleChatSession({
       };
     });
 
-    // Detect if user is asking about product fitment on a product page
-    const isProductPage = currentPageUrl && currentPageUrl.includes('/products/');
-    const isFitmentQuestion = /fit|fits|compatible|compatibility|will this work|does this fit|will it fit|vehicle|car|truck|suv/i.test(userMessage);
-    const isExplicitProductSearch = isExplicitProductSearchRequest(userMessage);
-    
-    // If on a product page and asking about fitment, automatically search for the current product
-    if (isProductPage && isFitmentQuestion && storefrontMcpTools.length > 0) {
+    // Sliding window: limit conversation history to prevent unbounded token growth
+    if (conversationHistory.length > AppConfig.conversation.maxHistoryMessages) {
+      conversationHistory = conversationHistory.slice(-AppConfig.conversation.maxHistoryMessages);
+    }
+
+    // If fitment auto-search returned product data, inject it into conversation context
+    if (fitmentSearchResult) {
       try {
-        // Extract product handle or ID from URL
-        const urlMatch = currentPageUrl.match(/\/products\/([^?&#]+)/);
-        if (urlMatch) {
-          const productHandle = urlMatch[1];
-          console.log(`Auto-searching for product from current page: ${productHandle}`);
-          
-          // Search for the product using the handle or title
-          const productSearchResult = await mcpClient.callTool(AppConfig.tools.productSearchName, {
-            query: productHandle,
-            context: `User is viewing product page: ${currentPageUrl}. They are asking about fitment/compatibility. Please search for this specific product and provide all details including title, description, tags, and any vehicle compatibility information.`
-          });
-          
-          // If product found, add it to conversation history as context
-          if (productSearchResult && !productSearchResult.error && productSearchResult.content) {
-            // Format product information for AI context
-            let productInfo = '';
-            try {
-              const content = Array.isArray(productSearchResult.content) 
-                ? productSearchResult.content[0]?.text || JSON.stringify(productSearchResult.content)
-                : typeof productSearchResult.content === 'string'
-                ? productSearchResult.content
-                : JSON.stringify(productSearchResult.content);
-              
-              let parsedContent;
-              if (typeof content === 'string') {
-                try {
-                  parsedContent = JSON.parse(content);
-                } catch {
-                  parsedContent = { text: content };
-                }
-              } else {
-                parsedContent = content;
-              }
-              
-              // Extract product details
-              const products = parsedContent?.products || (parsedContent?.text ? JSON.parse(parsedContent.text)?.products : null);
-              if (products && products.length > 0) {
-                const product = products[0];
-                // Extract SKU from variants if available
-                const sku = product.variants && product.variants.length > 0 
-                  ? product.variants[0].sku || product.variants.map(v => v.sku).filter(Boolean).join(', ')
-                  : product.sku || 'N/A';
-                
-                productInfo = `Product Title: ${product.title || 'N/A'}\nProduct SKU: ${sku}\nProduct Description: ${product.description || product.body_html || 'N/A'}\nProduct Tags: ${(product.tags || []).join(', ')}\nProduct URL: ${product.url || currentPageUrl}\nProduct Specifications: ${JSON.stringify(product.specifications || {})}\nAll Product Details: ${JSON.stringify(product)}`;
-              } else {
-                productInfo = JSON.stringify(parsedContent);
-              }
-            } catch (error) {
-              console.error('Error formatting product context:', error);
-              productInfo = JSON.stringify(productSearchResult.content);
-            }
-            
-            const productContext = {
-              role: 'user',
-              content: [{
-                type: 'text',
-                text: `[AUTO-SEARCHED PRODUCT CONTEXT] The customer is viewing this product page: ${currentPageUrl}. I automatically searched for and found the product details:\n\n${productInfo}\n\nPlease use this product information to answer the customer's question about fitment/compatibility.`
-              }]
-            };
-            
-            // Add product context before the user's question
-            conversationHistory.push(productContext);
-            console.log('Added product context to conversation history');
-          }
+        const content = Array.isArray(fitmentSearchResult.content)
+          ? fitmentSearchResult.content[0]?.text || JSON.stringify(fitmentSearchResult.content)
+          : typeof fitmentSearchResult.content === 'string'
+          ? fitmentSearchResult.content
+          : JSON.stringify(fitmentSearchResult.content);
+
+        let parsedContent;
+        try { parsedContent = typeof content === 'string' ? JSON.parse(content) : content; }
+        catch { parsedContent = { text: content }; }
+
+        const products = parsedContent?.products || (parsedContent?.text ? JSON.parse(parsedContent.text)?.products : null);
+        let productInfo;
+        if (products && products.length > 0) {
+          const p = products[0];
+          const sku = p.variants?.length > 0
+            ? p.variants[0].sku || p.variants.map(v => v.sku).filter(Boolean).join(', ')
+            : p.sku || 'N/A';
+          productInfo = `Product Title: ${p.title || 'N/A'}\nProduct SKU: ${sku}\nProduct Description: ${p.description || p.body_html || 'N/A'}\nProduct Tags: ${(p.tags || []).join(', ')}\nProduct URL: ${p.url || currentPageUrl}\nAll Product Details: ${JSON.stringify(p)}`;
+        } else {
+          productInfo = JSON.stringify(parsedContent);
         }
+
+        conversationHistory.push({
+          role: 'user',
+          content: [{ type: 'text', text: `[AUTO-SEARCHED PRODUCT CONTEXT] Customer is viewing: ${currentPageUrl}. Product details:\n\n${productInfo}\n\nUse this to answer the customer's fitment/compatibility question.` }]
+        });
+        console.log('Added auto-searched product context to conversation history');
       } catch (error) {
-        console.error('Error auto-searching for product:', error);
-        // Continue with normal flow even if auto-search fails
+        console.error('Error formatting product context:', error);
       }
     }
 
@@ -366,10 +345,6 @@ async function handleChatSession({
       return;
     }
 
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.jsx:177',message:'Before streamConversation call',data:{conversationHistoryLength:conversationHistory.length,toolsCount:mcpClient.tools.length,isProductPage,isFitmentQuestion,currentPageUrl},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-    // #endregion
-
     // Execute the conversation stream
     let finalMessage = { role: 'user', content: userMessage };
     let iterationCount = 0;
@@ -377,9 +352,6 @@ async function handleChatSession({
 
     while (finalMessage.stop_reason !== "end_turn" && iterationCount < maxIterations) {
       iterationCount++;
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.jsx:185',message:'While loop iteration',data:{iterationCount,stopReason:finalMessage.stop_reason},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-      // #endregion
       try {
         finalMessage = await openaiService.streamConversation(
         {
@@ -418,33 +390,33 @@ async function handleChatSession({
             let toolArgs = content.input || {};
             const toolUseId = content.id;
 
-            // Prevent redundant search if we already have auto-searched product context
-            if (toolName === AppConfig.tools.productSearchName) {
-              // Check if we already have auto-searched product context
-              const hasAutoSearchedContext = conversationHistory.some(msg => {
+            // Prevent the AI from re-searching the same product it already looked up
+            // in a previous tool call within this conversation turn.
+            // Category-based searches (e.g. "brake pads") always pass through
+            // so the fitment alternative workflow works.
+            if (toolName === AppConfig.tools.productSearchName && currentProductHandle) {
+              const alreadySearchedThisProduct = conversationHistory.some(msg => {
                 if (msg.role === 'user' && Array.isArray(msg.content)) {
-                  return msg.content.some(block => 
-                    block.type === 'text' && 
-                    typeof block.text === 'string' && 
-                    block.text.includes('[AUTO-SEARCHED PRODUCT CONTEXT]')
+                  return msg.content.some(block =>
+                    block.type === 'tool_result' &&
+                    typeof block.content === 'string' &&
+                    block.content.includes(currentProductHandle)
                   );
                 }
                 return false;
               });
-              
-              // If we have auto-searched context and this is a fitment question, skip the tool call
-              // and use the existing context instead
-              if (hasAutoSearchedContext && isFitmentQuestion) {
-                console.log('Skipping redundant search - using auto-searched product context');
-                // Add a tool result message indicating we're using existing context
+
+              const queryTargetsSameProduct = typeof toolArgs.query === 'string'
+                && toolArgs.query.toLowerCase().includes(currentProductHandle.toLowerCase());
+
+              if (alreadySearchedThisProduct && queryTargetsSameProduct) {
+                console.log('Skipping redundant search for same product');
                 await toolService.addToolResultToHistory(
                   conversationHistory,
                   toolUseId,
-                  { message: 'Using auto-searched product context - no additional search needed', skipSearch: true },
+                  { message: 'Product details already retrieved - use existing context', skipSearch: true },
                   conversationId
                 );
-                // Return early without calling the tool
-                // The AI should use the context that's already in the conversation
                 stream.sendMessage({ type: 'new_message' });
                 return;
               }
@@ -545,7 +517,9 @@ async function handleChatSession({
                 toolUseId,
                 conversationHistory,
                 productsToDisplay,
-                conversationId
+                conversationId,
+                toolArgs,
+                currentProductHandle
               );
             }
 
@@ -565,9 +539,6 @@ async function handleChatSession({
         }
       );
       } catch (error) {
-        // #region agent log
-        fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.jsx:278',message:'Error caught in streamConversation',data:{errorMessage:error.message,errorStack:error.stack,errorStatus:error.status},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-        // #endregion
         console.error("Error in streamConversation:", error);
         stream.sendError({
           type: 'error',
@@ -594,10 +565,6 @@ async function handleChatSession({
       });
     }
   } catch (error) {
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/ad0f175f-ba16-44b8-93b5-ae9594aeffc8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.jsx:282',message:'Error in handleChatSession catch',data:{errorMessage:error.message,errorStack:error.stack},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-    // #endregion
-    // The streaming handler takes care of error handling
     throw error;
   }
 }

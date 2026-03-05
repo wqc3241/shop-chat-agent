@@ -584,7 +584,7 @@
             current_page_url: window.location.href
           });
 
-          const streamUrl = 'http://localhost:3458/chat';
+          const streamUrl = '/apps/chat-agent/chat';
           const shopId = window.shopId;
 
           const response = await fetch(streamUrl, {
@@ -749,7 +749,7 @@
           messagesContainer.appendChild(loadingMessage);
 
           // Fetch history from the server
-          const historyUrl = `http://localhost:3458/chat?history=true&conversation_id=${encodeURIComponent(conversationId)}`;
+          const historyUrl = `/apps/chat-agent/chat?history=true&conversation_id=${encodeURIComponent(conversationId)}`;
           console.log('Fetching history from:', historyUrl);
 
           const response = await fetch(historyUrl, {
@@ -898,7 +898,7 @@
           attemptCount++;
 
           try {
-            const tokenUrl = 'http://localhost:3458/auth/token-status?conversation_id=' +
+            const tokenUrl = '/apps/chat-agent/auth/token-status?conversation_id=' +
               encodeURIComponent(conversationId);
             const response = await fetch(tokenUrl);
 
