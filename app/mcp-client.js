@@ -1,5 +1,6 @@
 import { generateAuthUrl } from "./auth.server";
 import { getCustomerToken } from "./db.server";
+import { cacheGet, cacheSet, CACHE_KEYS, CACHE_TTL } from "./services/cache.server";
 
 /**
  * Client for interacting with Model Context Protocol (MCP) API endpoints.
@@ -18,10 +19,10 @@ class MCPClient {
     this.customerTools = [];
     this.storefrontTools = [];
     // TODO: Make this dynamic, for that first we need to allow access of mcp tools on password proteted demo stores.
-    this.storefrontMcpEndpoint = `${hostUrl}/api/mcp`;
+    this.storefrontMcpEndpoint = hostUrl ? `${hostUrl}/api/mcp` : null;
 
-    const accountHostUrl = hostUrl.replace(/(\.myshopify\.com)$/, '.account$1');
-    this.customerMcpEndpoint = customerMcpEndpoint || `${accountHostUrl}/customer/api/mcp`;
+    const accountHostUrl = hostUrl ? hostUrl.replace(/(\.myshopify\.com)$/, '.account$1') : null;
+    this.customerMcpEndpoint = customerMcpEndpoint || (accountHostUrl ? `${accountHostUrl}/customer/api/mcp` : null);
     this.customerAccessToken = "";
     this.conversationId = conversationId;
     this.shopId = shopId;
@@ -84,6 +85,17 @@ class MCPClient {
    */
   async connectToStorefrontServer() {
     try {
+      // Fast path: check in-memory cache
+      const cacheKey = CACHE_KEYS.storefrontTools(this.storefrontMcpEndpoint);
+      const cached = cacheGet(cacheKey);
+      if (cached) {
+        const tools = [...cached]; // Clone to prevent cross-request mutation
+        this.storefrontTools = tools;
+        this.tools = [...this.tools, ...tools];
+        console.log(`Storefront MCP tools loaded from cache (${tools.length} tools)`);
+        return tools;
+      }
+
       console.log(`Connecting to MCP server at ${this.storefrontMcpEndpoint}`);
 
       const headers = {
@@ -100,6 +112,11 @@ class MCPClient {
       // Extract tools from the JSON-RPC response format
       const toolsData = response.result && response.result.tools ? response.result.tools : [];
       const storefrontTools = this._formatToolsData(toolsData);
+
+      // Cache on success
+      if (storefrontTools.length > 0) {
+        cacheSet(cacheKey, storefrontTools, CACHE_TTL.storefrontTools);
+      }
 
       this.storefrontTools = storefrontTools;
       this.tools = [...this.tools, ...storefrontTools];

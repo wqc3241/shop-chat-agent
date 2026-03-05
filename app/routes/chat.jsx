@@ -4,12 +4,13 @@
  */
 import "../env.server.js"; // Ensure environment variables are loaded
 import MCPClient from "../mcp-client";
-import { saveMessage, getConversationHistory, storeCustomerAccountUrls, getCustomerAccountUrls as getCustomerAccountUrlsFromDb } from "../db.server";
+import { saveMessage, getConversationHistory, storeCustomerAccountUrls, getCustomerAccountUrls as getCustomerAccountUrlsFromDb, updateConversationMeta, updateConversationOrders, getChatSettings } from "../db.server";
 import AppConfig from "../services/config.server";
 import { createSseStream } from "../services/streaming.server";
 import { createOpenAIService } from "../services/openai.server";
 import { createToolService } from "../services/tool.server";
 import { getWebSearchTool, executeWebSearch } from "../services/websearch.server";
+import { cacheGet, cacheSet, CACHE_KEYS, CACHE_TTL } from "../services/cache.server";
 
 
 /**
@@ -139,13 +140,26 @@ async function handleChatSession({
     // Send conversation ID to client
     stream.sendMessage({ type: 'id', conversation_id: conversationId });
 
+    // Extract shop hostname for DB linking
+    let shopHostname = null;
+    try {
+      if (shopDomain) shopHostname = new URL(shopDomain).hostname;
+    } catch { /* ignore parse errors */ }
+
     // Phase 1: Fire independent operations in parallel for faster TTFT
     // saveMessage → getConversationHistory must be sequential (history needs the saved message)
     // but they run in parallel with MCP connections
-    const [customerUrlsResult, storefrontResult, dbMessagesResult] = await Promise.allSettled([
+    const [customerUrlsResult, storefrontResult, dbMessagesResult, , chatSettingsResult] = await Promise.allSettled([
       getCustomerAccountUrls(shopDomain, conversationId),
-      mcpClient.connectToStorefrontServer(),
-      saveMessage(conversationId, 'user', userMessage).then(() => getConversationHistory(conversationId))
+      withTimeout(mcpClient.connectToStorefrontServer(), AppConfig.timeouts.storefrontMcpMs, 'storefront MCP connection timed out'),
+      saveMessage(conversationId, 'user', userMessage).then(() => getConversationHistory(conversationId)),
+      // Save shop + page URL metadata on the conversation (fire-and-forget)
+      shopHostname ? updateConversationMeta(conversationId, {
+        shop: shopHostname,
+        ...(currentPageUrl ? { pageUrl: currentPageUrl } : {}),
+      }) : Promise.resolve(),
+      // Fetch merchant's custom instructions
+      shopHostname ? getChatSettings(shopHostname) : Promise.resolve(null),
     ]);
 
     let storefrontMcpTools = [];
@@ -169,7 +183,7 @@ async function handleChatSession({
     const customerMcpPromise = (async () => {
       if (customerUrlsResult.status === 'fulfilled' && customerUrlsResult.value?.mcpApiUrl) {
         mcpClient.customerMcpEndpoint = customerUrlsResult.value.mcpApiUrl;
-        return withTimeout(mcpClient.connectToCustomerServer(), 500, 'customer MCP connection timed out');
+        return withTimeout(mcpClient.connectToCustomerServer(), AppConfig.timeouts.customerMcpMs, 'customer MCP connection timed out');
       }
       return [];
     })().catch(error => {
@@ -180,10 +194,14 @@ async function handleChatSession({
     const fitmentSearchPromise = (async () => {
       if (isProductPage && isFitmentQuestion && currentProductHandle && storefrontMcpTools.length > 0) {
         console.log(`Auto-searching for product: ${currentProductHandle}`);
-        const result = await mcpClient.callTool(AppConfig.tools.productSearchName, {
-          query: currentProductHandle,
-          context: `User is viewing product page: ${currentPageUrl}. They are asking about fitment/compatibility.`
-        });
+        const result = await withTimeout(
+          mcpClient.callTool(AppConfig.tools.productSearchName, {
+            query: currentProductHandle,
+            context: `User is viewing product page: ${currentPageUrl}. They are asking about fitment/compatibility.`
+          }),
+          AppConfig.timeouts.fitmentAutoSearchMs,
+          'fitment auto-search timed out'
+        );
         if (result && !result.error && result.content) return result;
       }
       return null;
@@ -345,6 +363,11 @@ async function handleChatSession({
       return;
     }
 
+    // Extract merchant's custom instructions (if any)
+    const customInstructions = chatSettingsResult?.status === 'fulfilled'
+      ? chatSettingsResult.value?.customInstructions || ''
+      : '';
+
     // Execute the conversation stream
     let finalMessage = { role: 'user', content: userMessage };
     let iterationCount = 0;
@@ -357,7 +380,8 @@ async function handleChatSession({
         {
           messages: conversationHistory,
           promptType,
-          tools: mcpClient.tools
+          tools: mcpClient.tools,
+          customInstructions,
         },
         {
           // Handle text chunks
@@ -500,6 +524,31 @@ async function handleChatSession({
               toolUseResponse = await mcpClient.callTool(toolName, toolArgs);
             }
 
+            // Extract order numbers from order-related tool calls
+            if ((toolName === 'get_order_status' || toolName === 'get_most_recent_order_status') && !toolUseResponse.error) {
+              try {
+                const resultText = Array.isArray(toolUseResponse.content)
+                  ? toolUseResponse.content[0]?.text || JSON.stringify(toolUseResponse.content)
+                  : typeof toolUseResponse.content === 'string'
+                    ? toolUseResponse.content
+                    : JSON.stringify(toolUseResponse.content);
+                // Match order numbers like #1001, 1001, or "name":"#1001"
+                const orderMatches = resultText.match(/#?\d{4,}/g);
+                if (orderMatches) {
+                  for (const match of orderMatches) {
+                    const orderNum = match.startsWith('#') ? match : `#${match}`;
+                    updateConversationOrders(conversationId, orderNum).catch(() => {});
+                  }
+                }
+                // Also check tool arguments
+                if (toolArgs.order_number || toolArgs.orderNumber) {
+                  const argOrder = toolArgs.order_number || toolArgs.orderNumber;
+                  const orderNum = String(argOrder).startsWith('#') ? argOrder : `#${argOrder}`;
+                  updateConversationOrders(conversationId, orderNum).catch(() => {});
+                }
+              } catch { /* best-effort extraction */ }
+            }
+
             // Handle tool response based on success/error
             if (toolUseResponse.error) {
               await toolService.handleToolError(
@@ -577,36 +626,42 @@ async function handleChatSession({
  */
 async function getCustomerAccountUrls(shopDomain, conversationId) {
   try {
-    // Check if the customer account URL exists in the DB
+    // Layer 1: In-memory cache keyed by shop domain (instant)
+    const cacheKey = CACHE_KEYS.customerAccountUrls(shopDomain);
+    const cached = cacheGet(cacheKey);
+    if (cached) return cached;
+
+    // Layer 2: DB cache keyed by conversationId (fast, persists across restarts)
     const existingUrls = await getCustomerAccountUrlsFromDb(conversationId);
+    if (existingUrls) {
+      cacheSet(cacheKey, existingUrls, CACHE_TTL.customerAccountUrls);
+      return existingUrls;
+    }
 
-    // If URL exists, return early with the MCP API URL
-    if (existingUrls) return existingUrls;
-
-    // If not, query for it from the Shopify API
+    // Layer 3: Fresh fetch from well-known endpoints
     const { hostname } = new URL(shopDomain);
 
-    const urls = await Promise.all([
+    const [mcpResponse, openidResponse] = await Promise.all([
       fetch(`https://${hostname}/.well-known/customer-account-api`).then(res => res.json()),
       fetch(`https://${hostname}/.well-known/openid-configuration`).then(res => res.json()),
-    ]).then(async ([mcpResponse, openidResponse]) => {
-      const response = {
-        mcpApiUrl: mcpResponse.mcp_api,
-        authorizationUrl: openidResponse.authorization_endpoint,
-        tokenUrl: openidResponse.token_endpoint,
-      };
+    ]);
 
-      await storeCustomerAccountUrls({
-        conversationId,
-        mcpApiUrl: mcpResponse.mcp_api,
-        authorizationUrl: openidResponse.authorization_endpoint,
-        tokenUrl: openidResponse.token_endpoint,
-      });
+    const response = {
+      mcpApiUrl: mcpResponse.mcp_api,
+      authorizationUrl: openidResponse.authorization_endpoint,
+      tokenUrl: openidResponse.token_endpoint,
+    };
 
-      return response;
+    // Persist to DB and in-memory cache
+    await storeCustomerAccountUrls({
+      conversationId,
+      mcpApiUrl: mcpResponse.mcp_api,
+      authorizationUrl: openidResponse.authorization_endpoint,
+      tokenUrl: openidResponse.token_endpoint,
     });
+    cacheSet(cacheKey, response, CACHE_TTL.customerAccountUrls);
 
-    return urls;
+    return response;
   } catch (error) {
     console.error("Error getting customer MCP API URL:", error);
     return null;

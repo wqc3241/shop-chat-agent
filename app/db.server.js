@@ -257,3 +257,154 @@ export async function getCustomerAccountUrls(conversationId) {
     return null;
   }
 }
+
+// ── Dashboard functions ──────────────────────────────────────────────
+
+/**
+ * Get or create chat settings for a shop
+ * @param {string} shop - The shop domain
+ * @returns {Promise<Object>} The chat settings
+ */
+export async function getChatSettings(shop) {
+  try {
+    let settings = await prisma.chatSettings.findUnique({ where: { shop } });
+    if (!settings) {
+      settings = await prisma.chatSettings.create({ data: { shop } });
+    }
+    return settings;
+  } catch (error) {
+    console.error('Error getting chat settings:', error);
+    return null;
+  }
+}
+
+/**
+ * Save chat settings for a shop
+ * @param {string} shop - The shop domain
+ * @param {Object} data - The settings to save
+ * @returns {Promise<Object>} The updated settings
+ */
+export async function saveChatSettings(shop, data) {
+  try {
+    return await prisma.chatSettings.upsert({
+      where: { shop },
+      create: { shop, ...data },
+      update: data,
+    });
+  } catch (error) {
+    console.error('Error saving chat settings:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get conversations for a shop with message counts
+ * @param {string} shop - The shop domain
+ * @param {number} limit - Max conversations to return
+ * @param {number} offset - Offset for pagination
+ * @returns {Promise<Object>} Conversations and total count
+ */
+export async function getConversationsForShop(shop, limit = 25, offset = 0) {
+  try {
+    const [conversations, total] = await Promise.all([
+      prisma.conversation.findMany({
+        where: { shop },
+        orderBy: { updatedAt: 'desc' },
+        take: limit,
+        skip: offset,
+        include: { _count: { select: { messages: true } } },
+      }),
+      prisma.conversation.count({ where: { shop } }),
+    ]);
+    return { conversations, total };
+  } catch (error) {
+    console.error('Error getting conversations:', error);
+    return { conversations: [], total: 0 };
+  }
+}
+
+/**
+ * Get a conversation with all its messages
+ * @param {string} id - The conversation ID
+ * @returns {Promise<Object|null>} The conversation with messages
+ */
+export async function getConversationWithMessages(id) {
+  try {
+    return await prisma.conversation.findUnique({
+      where: { id },
+      include: {
+        messages: { orderBy: { createdAt: 'asc' } },
+      },
+    });
+  } catch (error) {
+    console.error('Error getting conversation with messages:', error);
+    return null;
+  }
+}
+
+/**
+ * Append an order number to a conversation's orderNumbers field
+ * @param {string} conversationId - The conversation ID
+ * @param {string} orderNumber - The order number to add
+ */
+export async function updateConversationOrders(conversationId, orderNumber) {
+  try {
+    const conversation = await prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: { orderNumbers: true },
+    });
+    if (!conversation) return;
+
+    const existing = conversation.orderNumbers
+      ? conversation.orderNumbers.split(',').map(s => s.trim())
+      : [];
+    if (existing.includes(orderNumber)) return;
+    existing.push(orderNumber);
+
+    await prisma.conversation.update({
+      where: { id: conversationId },
+      data: { orderNumbers: existing.join(', ') },
+    });
+  } catch (error) {
+    console.error('Error updating conversation orders:', error);
+  }
+}
+
+/**
+ * Update conversation metadata (shop, pageUrl, customerEmail)
+ * @param {string} conversationId - The conversation ID
+ * @param {Object} data - Metadata fields to update
+ */
+export async function updateConversationMeta(conversationId, data) {
+  try {
+    await prisma.conversation.update({
+      where: { id: conversationId },
+      data,
+    });
+  } catch (error) {
+    console.error('Error updating conversation meta:', error);
+  }
+}
+
+/**
+ * Get dashboard metrics for a shop
+ * @param {string} shop - The shop domain
+ * @returns {Promise<Object>} Metrics object
+ */
+export async function getDashboardMetrics(shop) {
+  try {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    const [total, today, withOrders] = await Promise.all([
+      prisma.conversation.count({ where: { shop } }),
+      prisma.conversation.count({ where: { shop, createdAt: { gte: todayStart } } }),
+      prisma.conversation.count({ where: { shop, orderNumbers: { not: null } } }),
+    ]);
+
+    return { total, today, withOrders };
+  } catch (error) {
+    console.error('Error getting dashboard metrics:', error);
+    return { total: 0, today: 0, withOrders: 0 };
+  }
+}

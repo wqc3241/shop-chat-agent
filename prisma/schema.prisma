@@ -54,10 +54,27 @@ model CodeVerifier {
 }
 
 model Conversation {
-  id        String    @id
-  messages  Message[]
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  id            String    @id
+  shop          String?
+  orderNumbers  String?   // Comma-separated order numbers extracted from chat
+  customerEmail String?
+  pageUrl       String?   // URL where conversation started
+  messages      Message[]
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([shop])
+}
+
+model ChatSettings {
+  id                 String   @id @default(cuid())
+  shop               String   @unique
+  welcomeMessage     String   @default("👋 Hi there! How can I help you today?")
+  promptType         String   @default("standardAssistant")
+  customInstructions String   @default("")
+  bubbleColor        String   @default("#5046e4")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 }
 
 model Message {

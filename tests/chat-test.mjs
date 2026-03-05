@@ -37,40 +37,43 @@ const VERBOSE = flag("verbose");
 const TIMEOUT_MS = parseInt(param("timeout", "10000"), 10);
 const TARGET_TTFT_MS = parseInt(param("target", "2000"), 10);
 
+// ── Store config ────────────────────────────────────────────────────
+const STORE_DOMAIN = "https://dev-nlp-brochure.myshopify.com";
+
 // ── Test scenarios ──────────────────────────────────────────────────
 const TEST_CASES = [
   {
     name: "Simple greeting",
     message: "Hello, what can you help me with?",
-    current_page_url: "https://example.myshopify.com/",
+    current_page_url: `${STORE_DOMAIN}/`,
     judgePrompt: "The response should be a friendly greeting explaining what the assistant can help with (products, orders, etc). Is the response appropriate?",
     expectToolCall: false,
   },
   {
     name: "Product search",
     message: "Show me brake pads",
-    current_page_url: "https://example.myshopify.com/",
+    current_page_url: `${STORE_DOMAIN}/`,
     judgePrompt: "The assistant should either show product results or mention searching the catalog. Does it attempt to help find brake pads?",
     expectToolCall: true,
   },
   {
     name: "Fitment question on product page",
     message: "Does this fit my 2026 Dodge Challenger?",
-    current_page_url: "https://example.myshopify.com/products/test-brake-pad",
+    current_page_url: `${STORE_DOMAIN}/products/air-lift-11-23-dodge-charger-15-23-dodge-challenger-performance-rear-kit`,
     judgePrompt: "The assistant should address fitment/compatibility for a 2026 Dodge Challenger. It should either confirm, deny, or explain it needs to check. Does it address the fitment question?",
     expectToolCall: true,
   },
   {
     name: "General knowledge question",
     message: "What is your return policy?",
-    current_page_url: "https://example.myshopify.com/",
+    current_page_url: `${STORE_DOMAIN}/`,
     judgePrompt: "The assistant should attempt to answer about return policy (may use tools or general knowledge). Is the response relevant to return policies?",
     expectToolCall: false,
   },
   {
     name: "Follow-up question (new conversation)",
     message: "Do you have anything cheaper?",
-    current_page_url: "https://example.myshopify.com/collections/all",
+    current_page_url: `${STORE_DOMAIN}/collections/all`,
     judgePrompt: "Without prior context, the assistant should ask what product category the customer is looking for, or attempt to search. Is the response reasonable for a question without context?",
     expectToolCall: false,
   },
@@ -117,6 +120,7 @@ async function sendChatMessage(testCase) {
         "Content-Type": "application/json",
         Accept: "text/event-stream",
         "X-Shopify-Shop-Id": "test-shop",
+        Origin: STORE_DOMAIN,
       },
       body,
       signal: controller.signal,

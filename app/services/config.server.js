@@ -35,6 +35,13 @@ export const AppConfig = {
     maxProductsToDisplay: 5,
     maxFitmentSearchProducts: 20, // Broader result set for fitment alternative searches
     extractAllProductDetails: true
+  },
+
+  // Timeout Configuration (milliseconds)
+  timeouts: {
+    storefrontMcpMs: 2000,      // Storefront MCP tools/list (2s, cache makes this rare)
+    customerMcpMs: 500,          // Customer MCP tools/list (optional, graceful fallback)
+    fitmentAutoSearchMs: 3000,   // Fitment auto-search tools/call (AI can retry via tool call)
   }
 };
 

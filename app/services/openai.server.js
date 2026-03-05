@@ -127,15 +127,22 @@ export function createOpenAIService(apiKey = process.env.OPENAI_API_KEY) {
   const streamConversation = async ({
     messages,
     promptType = AppConfig.api.defaultPromptType,
-    tools
+    tools,
+    customInstructions = '',
   }, streamHandlers) => {
     try {
       // Get system prompt from configuration or use default
-      const systemInstruction = [
+      const parts = [
         getSystemPrompt(promptType),
         "Use the web_search tool when a question needs current events, external facts, or information not in store/catalog data.",
-        "Be concise. For fitment compatibility questions, provide clear details about which products fit and why. For simple questions, keep responses brief."
-      ].join("\n\n");
+        "Be concise. For fitment compatibility questions, provide clear details about which products fit and why. For simple questions, keep responses brief.",
+      ];
+
+      if (customInstructions && customInstructions.trim()) {
+        parts.push(`[MERCHANT INSTRUCTIONS]\n${customInstructions.trim()}`);
+      }
+
+      const systemInstruction = parts.join("\n\n");
 
       // Convert messages to OpenAI format
       const openaiMessages = convertMessagesToOpenAIFormat(messages);
