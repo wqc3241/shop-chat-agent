@@ -81,6 +81,16 @@ const TEST_CASES = [
     expectToolCall: false,
     maxChars: 400,
   },
+  {
+    name: "App proxy body parsing (form-encoded)",
+    message: "Hi, do you ship internationally?",
+    current_page_url: `${STORE_DOMAIN}/`,
+    judgePrompt: "The response should address shipping or ask for clarification. Is the response relevant and concise?",
+    expectToolCall: false,
+    maxChars: 600,
+    // Simulate Shopify app proxy: sends JSON body but with form-encoded Content-Type
+    contentType: "application/x-www-form-urlencoded",
+  },
 ];
 
 // ── SSE parser ──────────────────────────────────────────────────────
@@ -121,12 +131,12 @@ async function sendChatMessage(testCase) {
     const response = await fetch(CHAT_ENDPOINT, {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
+        "Content-Type": testCase.contentType || "application/json",
         Accept: "text/event-stream",
         "X-Shopify-Shop-Id": "test-shop",
         Origin: STORE_DOMAIN,
       },
-      body,
+      body,  // Always send JSON string — server should parse it regardless of Content-Type
       signal: controller.signal,
     });
 

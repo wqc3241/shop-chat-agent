@@ -261,3 +261,17 @@ Run manually against a running dev server (`npm run dev`).
 | 8.6 | Origin header missing | Chat request without Origin header | `shopHostname` is null; metadata save skipped gracefully |
 | 8.7 | Order number regex — 4+ digits | Tool response contains "Order #12345" | Extracted as `#12345` |
 | 8.8 | Order number regex — short numbers | Tool response contains "#12" (< 4 digits) | Not extracted (regex requires 4+ digits) |
+
+---
+
+## 9. Shopify App Proxy Compatibility
+
+| # | Test Case | Steps | Expected |
+|---|-----------|-------|----------|
+| 9.1 | JSON body with JSON Content-Type | POST `/chat` with `Content-Type: application/json` and JSON body | Parsed normally, returns 200 with SSE stream |
+| 9.2 | JSON body with form-encoded Content-Type | POST `/chat` with `Content-Type: application/x-www-form-urlencoded` but JSON body (app proxy behavior) | Server detects JSON in raw text, parses correctly, returns 200 |
+| 9.3 | Actual form-encoded body | POST `/chat` with `Content-Type: application/x-www-form-urlencoded` and body `message=hello&conversation_id=123` | Parsed via URLSearchParams, returns 200 |
+| 9.4 | Non-200 response handling (client) | Storefront chat receives a 500 from app proxy | Typing indicator removed, error message shown to user (no infinite loading) |
+| 9.5 | Empty SSE stream handling (client) | SSE stream ends with no `data:` events | Typing indicator removed, "couldn't get a response" message shown |
+| 9.6 | Tunnel expired | Cloudflare tunnel has expired, storefront sends request | App proxy returns 500+HTML; client shows error message, not infinite loading |
+| 9.7 | Build check — no .server.js side-effect imports | Run `npx react-router build` | Build succeeds; no "Server-only module referenced by client" error |
