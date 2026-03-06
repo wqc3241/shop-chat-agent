@@ -149,15 +149,20 @@ async function handleChatSession({
     // Phase 1: Fire independent operations in parallel for faster TTFT
     // saveMessage → getConversationHistory must be sequential (history needs the saved message)
     // but they run in parallel with MCP connections
-    const [customerUrlsResult, storefrontResult, dbMessagesResult, , chatSettingsResult] = await Promise.allSettled([
+    const [customerUrlsResult, storefrontResult, dbMessagesResult, chatSettingsResult] = await Promise.allSettled([
       getCustomerAccountUrls(shopDomain, conversationId),
       withTimeout(mcpClient.connectToStorefrontServer(), AppConfig.timeouts.storefrontMcpMs, 'storefront MCP connection timed out'),
-      saveMessage(conversationId, 'user', userMessage).then(() => getConversationHistory(conversationId)),
-      // Save shop + page URL metadata on the conversation (fire-and-forget)
-      shopHostname ? updateConversationMeta(conversationId, {
-        shop: shopHostname,
-        ...(currentPageUrl ? { pageUrl: currentPageUrl } : {}),
-      }) : Promise.resolve(),
+      // saveMessage creates the conversation, then we update meta, then fetch history
+      saveMessage(conversationId, 'user', userMessage)
+        .then(() => {
+          if (shopHostname) {
+            updateConversationMeta(conversationId, {
+              shop: shopHostname,
+              ...(currentPageUrl ? { pageUrl: currentPageUrl } : {}),
+            }).catch(() => {});
+          }
+          return getConversationHistory(conversationId);
+        }),
       // Fetch merchant's custom instructions
       shopHostname ? getChatSettings(shopHostname) : Promise.resolve(null),
     ]);
