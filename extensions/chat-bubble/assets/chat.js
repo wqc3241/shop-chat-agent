@@ -348,7 +348,7 @@
         ShopAIChat.UI.showTypingIndicator();
 
         try {
-          ShopAIChat.API.streamResponse(userMessage, conversationId, messagesContainer);
+          await ShopAIChat.API.streamResponse(userMessage, conversationId, messagesContainer);
         } catch (error) {
           console.error('Error communicating with OpenAI API:', error);
           ShopAIChat.UI.removeTypingIndicator();
@@ -597,12 +597,22 @@
             body: requestBody
           });
 
+          // Handle non-OK responses (e.g. app proxy errors)
+          if (!response.ok) {
+            console.error('Chat API error:', response.status, response.statusText);
+            ShopAIChat.UI.removeTypingIndicator();
+            ShopAIChat.Message.add("Sorry, I couldn't connect right now. Please try again in a moment.",
+              'assistant', messagesContainer);
+            return;
+          }
+
           const reader = response.body.getReader();
           const decoder = new TextDecoder();
           let buffer = '';
 
           // Don't create initial message element yet - wait for first chunk or new_message event
           let currentMessageElement = null;
+          let receivedAnyEvent = false;
 
           // Process the stream
           while (true) {
@@ -617,6 +627,7 @@
               if (line.startsWith('data: ')) {
                 try {
                   const data = JSON.parse(line.slice(6));
+                  receivedAnyEvent = true;
                   this.handleStreamEvent(data, currentMessageElement, messagesContainer, userMessage,
                     (newElement) => { currentMessageElement = newElement; });
                 } catch (e) {
@@ -624,6 +635,15 @@
                 }
               }
             }
+          }
+
+          // Ensure typing indicator is removed when stream ends
+          ShopAIChat.UI.removeTypingIndicator();
+
+          // If no SSE events were received, show an error
+          if (!receivedAnyEvent) {
+            ShopAIChat.Message.add("Sorry, I couldn't get a response. Please try again.",
+              'assistant', messagesContainer);
           }
         } catch (error) {
           console.error('Error in streaming:', error);

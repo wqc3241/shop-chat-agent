@@ -18,7 +18,7 @@ npm run typecheck        # React Router typegen + tsc --noEmit
 npm run deploy           # Deploy to Shopify (shopify app deploy)
 ```
 
-The dev server runs on port 3458 (configured in `shopify.web.toml`). On `predev`, Prisma client is generated; on `dev`, migrations are deployed before starting React Router.
+The dev server port is dynamic (assigned by Vite at startup — check terminal output or use `netstat` to find it). On `predev`, Prisma client is generated; on `dev`, migrations are deployed before starting React Router. The Shopify CLI also starts a proxy on a separate port and a Cloudflare tunnel.
 
 ## Architecture
 
@@ -67,10 +67,12 @@ Required in `.env`:
 
 ## Shopify App Config
 
-- `shopify.app.toml` — App identity, scopes, auth redirects. API version: `2025-04`.
+- `shopify.app.ai-chatbot.toml` — **Active config** (has the real `client_id` and `[app_proxy]` section). The default `shopify.app.toml` is a template with placeholder `client_id`.
+- The app proxy config (`[app_proxy]` in `shopify.app.ai-chatbot.toml`) has `automatically_update_urls_on_dev = true`, so `shopify app dev` updates the proxy URL to the current Cloudflare tunnel.
 - Access scopes: `customer_read_customers`, `customer_read_orders`, `customer_read_store_credit_account_transactions`, `customer_read_store_credit_accounts`, `unauthenticated_read_product_listings`
 - The app is embedded (`embedded = true`).
 - Workspaces: `extensions/*` (monorepo — extensions are npm workspaces).
+- Dev store: `dev-nlp-brochure.myshopify.com` (stored in `.shopify/project.json`).
 
 ## Theme Extension
 
@@ -104,6 +106,36 @@ Target: time-to-first-token (TTFT) under 2 seconds. Key changes:
 - **Condensed system prompts**: Both prompt variants reduced ~40% (verbose formatting guidelines removed, fitment instructions compressed into decision tree)
 - **Removed debug logging**: All `fetch('http://127.0.0.1:7244/...')` debug log blocks removed from `chat.jsx`, `openai.server.js`, `env.server.js`, `streaming.server.js`
 - **Customer MCP timeout**: Reduced to 500ms with graceful fallback
+
+## Shopify App Proxy Constraints
+
+The storefront chat widget sends requests through the Shopify app proxy (`/apps/chat-agent/chat`). Key behaviors to know:
+
+- **Content-Type conversion**: The proxy converts `application/json` POST bodies to `application/x-www-form-urlencoded`. The `chat.jsx` handler parses both formats: tries `request.json()` if Content-Type is JSON, otherwise reads raw text and tries `JSON.parse` first, then falls back to `URLSearchParams`.
+- **Error masking**: If the app returns a non-200 status, the proxy replaces the response body with the store's themed HTML error page (~162KB). You will NOT see your server's error JSON — only a 500 + HTML. To debug, write errors to a local file (`chat-debug.log`) instead of relying on response bodies.
+- **SSE streaming**: Works through the proxy in dev mode, but may buffer in production. Monitor for issues.
+- **Stripped headers**: The proxy strips `Cookie` and `Authorization` from requests, and strips `Set-Cookie`, `Connection`, and ~17 other headers from responses.
+- **Added parameters**: The proxy adds `shop`, `logged_in_customer_id`, `path_prefix`, `timestamp`, `signature` as query parameters.
+
+## Debugging "Chat Not Working" on Storefront
+
+When the storefront chat shows infinite loading or "Sorry, I couldn't connect":
+
+1. **Check if the tunnel is alive**: Cloudflare tunnels expire. If the chat worked before but stopped, restart the dev server (`npm run dev`) to get a fresh tunnel. This is the #1 cause.
+2. **Verify locally**: `curl -X POST http://localhost:<port>/apps/chat-agent/chat -H "Content-Type: application/json" -d '{"message":"test","conversation_id":"debug1"}'` — if this returns 200 with SSE data, the server is fine and the issue is the tunnel/proxy.
+3. **Check the build**: Run `npx react-router build` — if it fails, the dev server may have broken routes. Common cause: importing `.server.js` modules at the top level of route files (see below).
+4. **Write debug logs to file**: The Shopify proxy masks server errors. Add `appendFileSync('chat-debug.log', ...)` in the request handler to capture what the proxy actually sends. Check if the log file is created after a storefront request — if not, the request never reached the server (tunnel issue).
+
+## React Router `.server.js` Import Rules
+
+Route files in `app/routes/` are code-split by React Router. **Never** add top-level side-effect imports of `.server.js` files in route modules (e.g., `import "../env.server.js"`). React Router can strip `.server` imports from `loader`/`action` exports, but NOT module-level side-effect imports. This causes a build error:
+
+```
+Server-only module referenced by client
+'../env.server.js' imported by route 'app/routes/chat.jsx'
+```
+
+**Fix**: Remove the import. If env loading is needed, it's already handled by `app/entry.server.jsx` which runs before all routes. Named imports from `.server.js` inside `loader`/`action` are fine — React Router strips them automatically.
 
 ## Testing
 

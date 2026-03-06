@@ -2,7 +2,6 @@
  * Chat API Route
  * Handles chat interactions with OpenAI API and tools
  */
-import "../env.server.js"; // Ensure environment variables are loaded
 import MCPClient from "../mcp-client";
 import { saveMessage, getConversationHistory, storeCustomerAccountUrls, getCustomerAccountUrls as getCustomerAccountUrlsFromDb, updateConversationMeta, updateConversationOrders, getChatSettings } from "../db.server";
 import AppConfig from "../services/config.server";
@@ -67,8 +66,23 @@ async function handleHistoryRequest(request, conversationId) {
  */
 async function handleChatRequest(request) {
   try {
-    // Get message data from request body
-    const body = await request.json();
+    // Parse request body — handle both JSON and form-encoded (Shopify app proxy
+    // converts application/json to application/x-www-form-urlencoded)
+    let body;
+    const contentType = request.headers.get('Content-Type') || '';
+    if (contentType.includes('application/json')) {
+      body = await request.json();
+    } else {
+      // App proxy form-encoded or other formats: try JSON parse of the raw text
+      const rawText = await request.text();
+      try {
+        body = JSON.parse(rawText);
+      } catch {
+        // Fall back to parsing as form data
+        const params = new URLSearchParams(rawText);
+        body = Object.fromEntries(params.entries());
+      }
+    }
     const userMessage = body.message;
     const currentPageUrl = body.current_page_url || '';
 
