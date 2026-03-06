@@ -59,11 +59,15 @@ model Conversation {
   orderNumbers  String?   // Comma-separated order numbers extracted from chat
   customerEmail String?
   pageUrl       String?   // URL where conversation started
+  mode          String    @default("ai") // "ai" | "merchant" | "pending_merchant"
+  assignedTo    String?   // merchant staff identifier
+  handoffAt     DateTime? // when merchant took over
   messages      Message[]
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
   @@index([shop])
+  @@index([shop, mode])
 }
 
 model ChatSettings {
@@ -86,6 +90,7 @@ model Message {
   createdAt      DateTime     @default(now())
 
   @@index([conversationId])
+  @@index([conversationId, createdAt])
 }
 
 model CustomerAccountUrls {

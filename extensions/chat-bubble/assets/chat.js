@@ -365,9 +365,19 @@
        */
       add: function(text, sender, messagesContainer) {
         const messageElement = document.createElement('div');
-        messageElement.classList.add('shop-ai-message', sender);
+        const cssClass = sender === 'merchant' ? 'merchant' : sender;
+        messageElement.classList.add('shop-ai-message', cssClass);
 
-        if (sender === 'assistant') {
+        if (sender === 'merchant') {
+          // Add "Support Agent" label
+          const label = document.createElement('div');
+          label.className = 'shop-ai-message-label';
+          label.textContent = 'Support Agent';
+          messageElement.appendChild(label);
+          const contentEl = document.createElement('div');
+          contentEl.textContent = text;
+          messageElement.appendChild(contentEl);
+        } else if (sender === 'assistant') {
           messageElement.dataset.rawText = text;
           ShopAIChat.Formatting.formatMessageContent(messageElement);
         } else {
@@ -577,11 +587,13 @@
 
         try {
           const promptType = window.shopChatConfig?.promptType || "standardAssistant";
+          const currentMode = sessionStorage.getItem('shopAiChatMode') || 'ai';
           const requestBody = JSON.stringify({
             message: userMessage,
             conversation_id: conversationId,
             prompt_type: promptType,
-            current_page_url: window.location.href
+            current_page_url: window.location.href,
+            expected_mode: currentMode,
           });
 
           const streamUrl = '/apps/chat-agent/chat';
@@ -712,6 +724,19 @@
             sessionStorage.setItem('shopAiLastMessage', userMessage || '');
             break;
 
+          case 'mode':
+            sessionStorage.setItem('shopAiChatMode', data.mode);
+            ShopAIChat.ModeIndicator.update(data.mode);
+            if (data.mode === 'merchant') {
+              const convId = sessionStorage.getItem('shopAiConversationId');
+              if (convId) {
+                ShopAIChat.Polling.start(convId, messagesContainer);
+              }
+            } else if (data.mode === 'ai') {
+              ShopAIChat.Polling.stop();
+            }
+            break;
+
           case 'product_results':
             ShopAIChat.UI.displayProductResults(data.products);
             break;
@@ -798,17 +823,27 @@
             return;
           }
 
+          // Update mode from history response
+          if (data.mode) {
+            sessionStorage.setItem('shopAiChatMode', data.mode);
+            ShopAIChat.ModeIndicator.update(data.mode);
+            if (data.mode === 'merchant') {
+              ShopAIChat.Polling.start(conversationId, messagesContainer);
+            }
+          }
+
           // Add messages to the UI - filter out tool results
           data.messages.forEach(message => {
+            const role = message.role;
             try {
               const messageContents = JSON.parse(message.content);
               for (const contentBlock of messageContents) {
                 if (contentBlock.type === 'text') {
-                  ShopAIChat.Message.add(contentBlock.text, message.role, messagesContainer);
+                  ShopAIChat.Message.add(contentBlock.text, role, messagesContainer);
                 }
               }
             } catch (e) {
-              ShopAIChat.Message.add(message.content, message.role, messagesContainer);
+              ShopAIChat.Message.add(message.content, role, messagesContainer);
             }
           });
 
@@ -832,6 +867,102 @@
           sessionStorage.removeItem('shopAiConversationId');
         }
       }
+    },
+
+    /**
+     * Polling for merchant messages when in merchant mode
+     */
+    Polling: {
+      timer: null,
+      lastTimestamp: null,
+
+      /**
+       * Start polling for new merchant messages
+       * @param {string} conversationId - The conversation ID
+       * @param {HTMLElement} messagesContainer - The messages container
+       */
+      start: function(conversationId, messagesContainer) {
+        this.stop(); // Clear any existing poll
+        this.lastTimestamp = new Date().toISOString();
+
+        this.timer = setInterval(async () => {
+          try {
+            const pollUrl = `/apps/chat-agent/chat?poll=true&conversation_id=${encodeURIComponent(conversationId)}&since=${encodeURIComponent(this.lastTimestamp)}`;
+            const response = await fetch(pollUrl);
+            if (!response.ok) return;
+
+            const data = await response.json();
+
+            // Render new merchant messages
+            if (data.messages && data.messages.length > 0) {
+              data.messages.forEach(msg => {
+                ShopAIChat.Message.add(msg.content, 'merchant', messagesContainer);
+                this.lastTimestamp = msg.createdAt;
+              });
+            }
+
+            // Update mode if changed
+            const currentMode = sessionStorage.getItem('shopAiChatMode');
+            if (data.mode && data.mode !== currentMode) {
+              sessionStorage.setItem('shopAiChatMode', data.mode);
+              ShopAIChat.ModeIndicator.update(data.mode);
+            }
+
+            // If mode changed back to AI, stop polling
+            if (data.mode === 'ai') {
+              this.stop();
+            }
+          } catch (e) {
+            console.warn('Polling error:', e);
+          }
+        }, 3000);
+      },
+
+      /**
+       * Stop polling
+       */
+      stop: function() {
+        if (this.timer) {
+          clearInterval(this.timer);
+          this.timer = null;
+        }
+      },
+    },
+
+    /**
+     * Mode indicator bar shown in chat header
+     */
+    ModeIndicator: {
+      element: null,
+
+      /**
+       * Create or update mode indicator
+       * @param {string} mode - 'ai', 'merchant', or 'pending_merchant'
+       */
+      update: function(mode) {
+        const header = document.querySelector('.shop-ai-chat-header');
+        if (!header) return;
+
+        // Remove existing indicator
+        const existing = header.querySelector('.shop-ai-chat-status');
+        if (existing) existing.remove();
+
+        if (mode === 'ai') return; // No indicator for AI mode
+
+        const indicator = document.createElement('div');
+        indicator.className = 'shop-ai-chat-status';
+
+        if (mode === 'merchant') {
+          indicator.textContent = 'Chatting with Support';
+          indicator.classList.add('merchant-active');
+        } else if (mode === 'pending_merchant') {
+          indicator.textContent = 'Waiting for agent...';
+          indicator.classList.add('pending');
+        }
+
+        header.appendChild(indicator);
+        this.element = indicator;
+      },
     },
 
     /**
@@ -1100,17 +1231,121 @@
 
       this.UI.init(container);
 
+      // Add "Talk to a person" link in the chat header
+      this.addHumanRequestLink(container);
+
       // Check for existing conversation
       const conversationId = sessionStorage.getItem('shopAiConversationId');
 
       if (conversationId) {
-        // Fetch conversation history
+        // Fetch conversation history and restore mode
         this.API.fetchChatHistory(conversationId, this.UI.elements.messagesContainer);
+
+        // Restore mode from sessionStorage and resume polling if needed
+        const savedMode = sessionStorage.getItem('shopAiChatMode');
+        if (savedMode && savedMode !== 'ai') {
+          this.ModeIndicator.update(savedMode);
+          if (savedMode === 'merchant' || savedMode === 'pending_merchant') {
+            this.Polling.start(conversationId, this.UI.elements.messagesContainer);
+          }
+        }
       } else {
         // No previous conversation, show welcome message
         const welcomeMessage = window.shopChatConfig?.welcomeMessage || "👋 Hi there! How can I help you today?";
         this.Message.add(welcomeMessage, 'assistant', this.UI.elements.messagesContainer);
       }
+    },
+
+    /**
+     * Add a "Talk to a person" link below the chat header
+     * @param {HTMLElement} container - The chat container
+     */
+    addHumanRequestLink: function(container) {
+      const header = container.querySelector('.shop-ai-chat-header');
+      if (!header) return;
+
+      const link = document.createElement('a');
+      link.href = '#';
+      link.className = 'shop-ai-request-human';
+      link.textContent = 'Talk to a person';
+      link.addEventListener('click', (e) => {
+        e.preventDefault();
+        this.requestHuman();
+      });
+
+      header.appendChild(link);
+    },
+
+    /**
+     * Request a human agent
+     */
+    requestHuman: function() {
+      const conversationId = sessionStorage.getItem('shopAiConversationId');
+      const messagesContainer = this.UI.elements.messagesContainer;
+
+      sessionStorage.setItem('shopAiChatMode', 'pending_merchant');
+      this.ModeIndicator.update('pending_merchant');
+
+      // Start polling so customer sees merchant messages once agent joins
+      if (conversationId && messagesContainer) {
+        this.Polling.start(conversationId, messagesContainer);
+      }
+
+      // Send request_human flag to backend
+      const requestBody = JSON.stringify({
+        message: "I'd like to talk to a person, please.",
+        conversation_id: conversationId,
+        request_human: true,
+        current_page_url: window.location.href,
+        prompt_type: window.shopChatConfig?.promptType || "standardAssistant",
+      });
+
+      this.Message.add("I'd like to talk to a person, please.", 'user', messagesContainer);
+      this.UI.showTypingIndicator();
+
+      fetch('/apps/chat-agent/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'text/event-stream',
+          'X-Shopify-Shop-Id': window.shopId,
+        },
+        body: requestBody,
+      }).then(response => {
+        if (!response.ok) {
+          this.UI.removeTypingIndicator();
+          return;
+        }
+        // Process SSE stream as usual
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let currentEl = null;
+
+        const pump = async () => {
+          const { value, done } = await reader.read();
+          if (done) {
+            this.UI.removeTypingIndicator();
+            return;
+          }
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n\n');
+          buffer = lines.pop() || '';
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                this.API.handleStreamEvent(data, currentEl, messagesContainer, '',
+                  (newEl) => { currentEl = newEl; });
+              } catch { /* ignore */ }
+            }
+          }
+          return pump();
+        };
+        return pump();
+      }).catch(() => {
+        this.UI.removeTypingIndicator();
+      });
     }
   };
 

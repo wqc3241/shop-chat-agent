@@ -258,6 +258,141 @@ export async function getCustomerAccountUrls(conversationId) {
   }
 }
 
+// ── Live chat (merchant handoff) functions ───────────────────────────
+
+/**
+ * Get a conversation without messages (for mode checks)
+ * @param {string} id - The conversation ID
+ * @returns {Promise<Object|null>} The conversation or null
+ */
+export async function getConversation(id) {
+  try {
+    return await prisma.conversation.findUnique({ where: { id } });
+  } catch (error) {
+    console.error('Error getting conversation:', error);
+    return null;
+  }
+}
+
+/**
+ * Get messages created after a given timestamp
+ * @param {string} conversationId - The conversation ID
+ * @param {Date|string} sinceDate - Only return messages after this date
+ * @returns {Promise<Array>} Array of messages
+ */
+export async function getMessagesSince(conversationId, sinceDate) {
+  try {
+    return await prisma.message.findMany({
+      where: {
+        conversationId,
+        createdAt: { gt: new Date(sinceDate) },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+  } catch (error) {
+    console.error('Error getting messages since:', error);
+    return [];
+  }
+}
+
+/**
+ * Update conversation fields (mode, assignedTo, handoffAt, etc.)
+ * @param {string} id - The conversation ID
+ * @param {Object} data - Fields to update
+ * @returns {Promise<Object|null>} The updated conversation or null
+ */
+export async function updateConversation(id, data) {
+  try {
+    return await prisma.conversation.update({ where: { id }, data });
+  } catch (error) {
+    console.error('Error updating conversation:', error);
+    return null;
+  }
+}
+
+/**
+ * Get active conversations for a shop (last 24h) with last message preview
+ * @param {string} shop - The shop domain
+ * @returns {Promise<Array>} Array of conversations with previews
+ */
+export async function getActiveConversations(shop) {
+  try {
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const conversations = await prisma.conversation.findMany({
+      where: {
+        shop,
+        updatedAt: { gte: since },
+      },
+      orderBy: { updatedAt: 'desc' },
+      include: {
+        _count: { select: { messages: true } },
+        messages: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: { content: true, role: true, createdAt: true },
+        },
+      },
+    });
+    return conversations;
+  } catch (error) {
+    console.error('Error getting active conversations:', error);
+    return [];
+  }
+}
+
+/**
+ * Attempt optimistic takeover — only succeeds if no one else has taken it
+ * @param {string} id - The conversation ID
+ * @param {string} merchantId - The merchant staff identifier
+ * @returns {Promise<{conversation?: Object, error?: string}>} Result with conversation or error
+ */
+export async function takeOverConversation(id, merchantId) {
+  try {
+    // Optimistic lock: only take over if assignedTo is null
+    const result = await prisma.conversation.updateMany({
+      where: { id, assignedTo: null },
+      data: {
+        mode: 'merchant',
+        assignedTo: merchantId,
+        handoffAt: new Date(),
+      },
+    });
+    if (result.count === 0) {
+      // Check why it failed — is someone else assigned, or does it not exist?
+      const existing = await prisma.conversation.findUnique({ where: { id } });
+      if (!existing) return { error: 'not_found' };
+      if (existing.assignedTo) return { error: 'already_taken', assignedTo: existing.assignedTo };
+      return { error: 'already_taken' };
+    }
+    const conversation = await prisma.conversation.findUnique({ where: { id } });
+    return { conversation };
+  } catch (error) {
+    console.error('Error taking over conversation:', error);
+    return { error: 'db_error', message: error.message };
+  }
+}
+
+/**
+ * Release a conversation back to AI
+ * @param {string} id - The conversation ID
+ * @returns {Promise<Object|null>} Updated conversation
+ */
+export async function releaseConversation(id) {
+  try {
+    return await prisma.conversation.update({
+      where: { id },
+      data: {
+        mode: 'ai',
+        assignedTo: null,
+        handoffAt: null,
+      },
+    });
+  } catch (error) {
+    console.error('Error releasing conversation:', error);
+    return null;
+  }
+}
+
 // ── Dashboard functions ──────────────────────────────────────────────
 
 /**

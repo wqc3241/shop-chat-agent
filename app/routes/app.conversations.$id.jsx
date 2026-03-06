@@ -48,6 +48,10 @@ export default function ConversationDetail() {
     <s-page
       heading={`Conversation ${conversation.id.slice(0, 12)}…`}
       backAction={{ content: "Back", url: "/app" }}
+      primaryAction={{
+        content: "Live Chat",
+        url: `/app/live-chat?conversation=${conversation.id}`,
+      }}
     >
       {/* Messages */}
       <s-section>

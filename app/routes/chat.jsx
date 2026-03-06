@@ -3,7 +3,7 @@
  * Handles chat interactions with OpenAI API and tools
  */
 import MCPClient from "../mcp-client";
-import { saveMessage, getConversationHistory, storeCustomerAccountUrls, getCustomerAccountUrls as getCustomerAccountUrlsFromDb, updateConversationMeta, updateConversationOrders, getChatSettings } from "../db.server";
+import { saveMessage, getConversationHistory, storeCustomerAccountUrls, getCustomerAccountUrls as getCustomerAccountUrlsFromDb, updateConversationMeta, updateConversationOrders, getChatSettings, getConversation, getMessagesSince, updateConversation } from "../db.server";
 import AppConfig from "../services/config.server";
 import { createSseStream } from "../services/streaming.server";
 import { createOpenAIService } from "../services/openai.server";
@@ -25,6 +25,11 @@ export async function loader({ request }) {
   }
 
   const url = new URL(request.url);
+
+  // Handle storefront polling for merchant messages
+  if (url.searchParams.has('poll') && url.searchParams.has('conversation_id')) {
+    return handlePollRequest(request, url);
+  }
 
   // Handle history fetch requests - matches /chat?history=true&conversation_id=XYZ
   if (url.searchParams.has('history') && url.searchParams.has('conversation_id')) {
@@ -54,9 +59,41 @@ export async function action({ request }) {
  * @returns {Response} JSON response with chat history
  */
 async function handleHistoryRequest(request, conversationId) {
-  const messages = await getConversationHistory(conversationId);
+  const [messages, conversation] = await Promise.all([
+    getConversationHistory(conversationId),
+    getConversation(conversationId),
+  ]);
 
-  return new Response(JSON.stringify({ messages }), { headers: getCorsHeaders(request) });
+  return new Response(JSON.stringify({
+    messages,
+    mode: conversation?.mode || 'ai',
+  }), { headers: { ...getCorsHeaders(request), 'Content-Type': 'application/json' } });
+}
+
+/**
+ * Handle storefront polling for new merchant messages
+ * @param {Request} request - The request object
+ * @param {URL} url - Parsed URL
+ * @returns {Response} JSON response with new messages and mode
+ */
+async function handlePollRequest(request, url) {
+  const conversationId = url.searchParams.get('conversation_id');
+  const since = url.searchParams.get('since');
+
+  const [conversation, messages] = await Promise.all([
+    getConversation(conversationId),
+    since ? getMessagesSince(conversationId, since) : Promise.resolve([]),
+  ]);
+
+  // Return merchant + assistant messages (assistant = system messages from handoff/release).
+  // Customer's own messages are already displayed locally; AI responses come via SSE.
+  // During merchant mode the mode gate blocks AI, so assistant messages are only system notices.
+  const merchantMessages = messages.filter(m => m.role === 'merchant' || m.role === 'assistant');
+
+  return new Response(JSON.stringify({
+    messages: merchantMessages,
+    mode: conversation?.mode || 'ai',
+  }), { headers: { ...getCorsHeaders(request), 'Content-Type': 'application/json' } });
 }
 
 /**
@@ -85,6 +122,8 @@ async function handleChatRequest(request) {
     }
     const userMessage = body.message;
     const currentPageUrl = body.current_page_url || '';
+    const requestHuman = body.request_human === true || body.request_human === 'true';
+    const expectedMode = body.expected_mode || null;
 
     // Validate required message
     if (!userMessage) {
@@ -106,7 +145,9 @@ async function handleChatRequest(request) {
         conversationId,
         promptType,
         currentPageUrl,
-        stream
+        stream,
+        requestHuman,
+        expectedMode,
       });
     });
 
@@ -138,7 +179,9 @@ async function handleChatSession({
   conversationId,
   promptType,
   currentPageUrl,
-  stream
+  stream,
+  requestHuman,
+  expectedMode,
 }) {
   const openaiService = createOpenAIService();
   const toolService = createToolService();
@@ -154,6 +197,29 @@ async function handleChatSession({
     // Send conversation ID to client
     stream.sendMessage({ type: 'id', conversation_id: conversationId });
 
+    // ── Mode gate: check if a merchant has taken over this conversation ──
+    // Save the user message first so the merchant can see it
+    await saveMessage(conversationId, 'user', userMessage);
+
+    const conversation = await getConversation(conversationId);
+
+    // If client expected a different mode, inform them of the actual mode
+    if (expectedMode && conversation && expectedMode !== conversation.mode) {
+      stream.sendMessage({ type: 'mode', mode: conversation.mode });
+    }
+
+    // Handle "request human" — set pending_merchant mode
+    if (requestHuman && conversation) {
+      await updateConversation(conversationId, { mode: 'pending_merchant' });
+    }
+
+    // If merchant is active, short-circuit — skip AI entirely
+    if (conversation && conversation.mode === 'merchant') {
+      stream.sendMessage({ type: 'mode', mode: 'merchant' });
+      stream.sendMessage({ type: 'end_turn' });
+      return;
+    }
+
     // Extract shop hostname for DB linking
     let shopHostname = null;
     try {
@@ -163,20 +229,18 @@ async function handleChatSession({
     // Phase 1: Fire independent operations in parallel for faster TTFT
     // saveMessage → getConversationHistory must be sequential (history needs the saved message)
     // but they run in parallel with MCP connections
+    // Update conversation meta (message already saved in mode gate above)
+    if (shopHostname) {
+      updateConversationMeta(conversationId, {
+        shop: shopHostname,
+        ...(currentPageUrl ? { pageUrl: currentPageUrl } : {}),
+      }).catch(() => {});
+    }
+
     const [customerUrlsResult, storefrontResult, dbMessagesResult, chatSettingsResult] = await Promise.allSettled([
       getCustomerAccountUrls(shopDomain, conversationId),
       withTimeout(mcpClient.connectToStorefrontServer(), AppConfig.timeouts.storefrontMcpMs, 'storefront MCP connection timed out'),
-      // saveMessage creates the conversation, then we update meta, then fetch history
-      saveMessage(conversationId, 'user', userMessage)
-        .then(() => {
-          if (shopHostname) {
-            updateConversationMeta(conversationId, {
-              shop: shopHostname,
-              ...(currentPageUrl ? { pageUrl: currentPageUrl } : {}),
-            }).catch(() => {});
-          }
-          return getConversationHistory(conversationId);
-        }),
+      getConversationHistory(conversationId),
       // Fetch merchant's custom instructions
       shopHostname ? getChatSettings(shopHostname) : Promise.resolve(null),
     ]);
@@ -255,15 +319,22 @@ async function handleChatSession({
       } catch (e) {
         content = dbMessage.content;
       }
-      return {
-        role: dbMessage.role,
-        content
-      };
+      // Map merchant messages to assistant role so OpenAI has context
+      const role = dbMessage.role === 'merchant' ? 'assistant' : dbMessage.role;
+      return { role, content };
     });
 
     // Sliding window: limit conversation history to prevent unbounded token growth
     if (conversationHistory.length > AppConfig.conversation.maxHistoryMessages) {
       conversationHistory = conversationHistory.slice(-AppConfig.conversation.maxHistoryMessages);
+    }
+
+    // If customer requested a human, inject context for the AI to acknowledge
+    if (requestHuman) {
+      conversationHistory.push({
+        role: 'user',
+        content: [{ type: 'text', text: '[SYSTEM] The customer has requested to speak with a human team member. Acknowledge this in your response and let them know a team member has been notified and will join shortly. Continue assisting them in the meantime.' }]
+      });
     }
 
     // If fitment auto-search returned product data, inject it into conversation context
