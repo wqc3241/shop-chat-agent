@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-A Shopify template app that embeds an AI-powered chat widget on storefronts. Shoppers can search products, ask about policies, manage carts, track orders, and initiate returns â€” all via natural language. The backend uses OpenAI with Shopify's Model Context Protocol (MCP) for tool invocation.
+A Shopify template app that embeds an AI-powered chat widget on storefronts. Shoppers can search products, ask about policies, manage carts, track orders, and initiate returns â€?all via natural language. The backend uses OpenAI with Shopify's Model Context Protocol (MCP) for tool invocation.
 
 ## Development Commands
 
@@ -18,36 +18,36 @@ npm run typecheck        # React Router typegen + tsc --noEmit
 npm run deploy           # Deploy to Shopify (shopify app deploy)
 ```
 
-The dev server port is dynamic (assigned by Vite at startup â€” check terminal output or use `netstat` to find it). On `predev`, Prisma client is generated; on `dev`, migrations are deployed before starting React Router. The Shopify CLI also starts a proxy on a separate port and a Cloudflare tunnel.
+The dev server port is dynamic (assigned by Vite at startup â€?check terminal output or use `netstat` to find it). On `predev`, Prisma client is generated; on `dev`, migrations are deployed before starting React Router. The Shopify CLI also starts a proxy on a separate port and a Cloudflare tunnel.
 
 ## Architecture
 
 **Two main components:**
 
-1. **Backend (React Router server)** â€” handles chat messages, streams responses via SSE, orchestrates OpenAI + MCP tool calls
-2. **Chat UI (Shopify theme extension)** â€” `extensions/chat-bubble/` provides the storefront-facing chat widget
+1. **Backend (React Router server)** â€?handles chat messages, streams responses via SSE, orchestrates OpenAI + MCP tool calls
+2. **Chat UI (Shopify theme extension)** â€?`extensions/chat-bubble/` provides the storefront-facing chat widget
 
-**Request flow (optimized â€” parallelized for <2s TTFT):**
+**Request flow (optimized â€?parallelized for <2s TTFT):**
 1. Chat bubble (`extensions/chat-bubble/assets/chat.js`) sends POST to `/chat` endpoint
 2. `app/routes/chat.jsx` receives the request
-3. **Phase 1 (parallel):** `getCustomerAccountUrls()`, `connectToStorefrontServer()`, and `saveMessage() â†’ getConversationHistory()` run concurrently via `Promise.allSettled`
+3. **Phase 1 (parallel):** `getCustomerAccountUrls()`, `connectToStorefrontServer()`, and `saveMessage() â†?getConversationHistory()` run concurrently via `Promise.allSettled`
 4. **Phase 2 (parallel):** Customer MCP connection (500ms timeout) and fitment auto-search (if on product page with fitment question) run concurrently via `Promise.all`
 5. OpenAI service streams a completion with MCP tools converted to OpenAI function-calling format
 6. When OpenAI returns `finish_reason: "tool_calls"`, tools are executed via MCP, results fed back, and the loop continues until a final text response
 7. Response is streamed back to the client via SSE; messages are persisted to the database
 
 **Key services in `app/services/`:**
-- `openai.server.js` â€” OpenAI client creation, MCPâ†’OpenAI tool conversion, streaming completions. Maps `finish_reason: "tool_calls"` â†’ `stop_reason: "tool_use"` to keep the while loop running for multi-turn tool calls
-- `tool.server.js` â€” Tool response processing, product search result formatting. Supports fitment-aware mode (`fitment_search:true` in context) with broader results (20 products) and current-product exclusion
-- `streaming.server.js` â€” SSE StreamManager with backpressure handling
-- `websearch.server.js` â€” DuckDuckGo web search integration (no API key needed)
-- `config.server.js` â€” Centralized config (model name, max tokens: 1200, prompt type, conversation max history: 20 messages, tool settings including `maxFitmentSearchProducts: 20`)
+- `openai.server.js` â€?OpenAI client creation, MCPâ†’OpenAI tool conversion, streaming completions. Maps `finish_reason: "tool_calls"` â†?`stop_reason: "tool_use"` to keep the while loop running for multi-turn tool calls
+- `tool.server.js` â€?Tool response processing, product search result formatting. Supports fitment-aware mode (`fitment_search:true` in context) with broader results (20 products) and current-product exclusion
+- `streaming.server.js` â€?SSE StreamManager with backpressure handling
+- `websearch.server.js` â€?DuckDuckGo web search integration (no API key needed)
+- `config.server.js` â€?Centralized config (model name, max tokens: 1200, prompt type, conversation max history: 20 messages, tool settings including `maxFitmentSearchProducts: 20`)
 
 **Other key files:**
-- `app/mcp-client.js` â€” MCP protocol client; connects to customer MCP (authenticated) and storefront MCP (public), handles JSON-RPC
-- `app/db.server.js` â€” Prisma database operations (sessions, conversations, messages, customer tokens, PKCE code verifiers)
-- `app/auth.server.js` â€” OAuth 2.0 + PKCE flow for customer account access
-- `app/prompts/prompts.json` â€” System prompts v4.0 (two variants: `standardAssistant` and `enthusiasticAssistant`). Condensed with two-layer fitment search instructions. `enthusiasticAssistant` has a `personalityPrefix` field
+- `app/mcp-client.js` â€?MCP protocol client; connects to customer MCP (authenticated) and storefront MCP (public), handles JSON-RPC
+- `app/db.server.js` â€?Prisma database operations (sessions, conversations, messages, customer tokens, PKCE code verifiers)
+- `app/auth.server.js` â€?OAuth 2.0 + PKCE flow for customer account access
+- `app/prompts/prompts.json` â€?System prompts v4.0 (two variants: `standardAssistant` and `enthusiasticAssistant`). Condensed with two-layer fitment search instructions. `enthusiasticAssistant` has a `personalityPrefix` field
 
 ## Database
 
@@ -62,24 +62,39 @@ npx prisma migrate deploy    # Apply migrations
 ## Environment Variables
 
 Required in `.env`:
-- `OPENAI_API_KEY` â€” OpenAI API key
-- `SHOPIFY_API_KEY` â€” Shopify app API key (also set via `shopify.app.toml` client_id)
+- `OPENAI_API_KEY` â€?OpenAI API key
+- `SHOPIFY_API_KEY` â€?Shopify app API key (also set via `shopify.app.toml` client_id)
 
 ## Shopify App Config
 
-- `shopify.app.ai-chatbot.toml` â€” **Active config** (has the real `client_id` and `[app_proxy]` section). The default `shopify.app.toml` is a template with placeholder `client_id`.
+- `shopify.app.ai-chatbot.toml` â€?**Active config** (has the real `client_id` and `[app_proxy]` section). The default `shopify.app.toml` is a template with placeholder `client_id`.
 - The app proxy config (`[app_proxy]` in `shopify.app.ai-chatbot.toml`) has `automatically_update_urls_on_dev = true`, so `shopify app dev` updates the proxy URL to the current Cloudflare tunnel.
 - Access scopes: `customer_read_customers`, `customer_read_orders`, `customer_read_store_credit_account_transactions`, `customer_read_store_credit_accounts`, `unauthenticated_read_product_listings`
 - The app is embedded (`embedded = true`).
-- Workspaces: `extensions/*` (monorepo â€” extensions are npm workspaces).
+- Workspaces: `extensions/*` (monorepo â€?extensions are npm workspaces).
 - Dev store: `dev-nlp-brochure.myshopify.com` (stored in `.shopify/project.json`).
 
 ## Theme Extension
 
 `extensions/chat-bubble/` is a Shopify theme app extension:
-- `blocks/chat-interface.liquid` â€” Liquid block with merchant-configurable settings (bubble color, welcome message, prompt selection)
-- `assets/chat.js` â€” Client-side chat logic (UI interactions, API calls, SSE handling, message rendering)
-- `assets/chat.css` â€” Chat widget styling (responsive, mobile-aware)
+- `blocks/chat-interface.liquid` â€?Liquid block with merchant-configurable settings (bubble color, welcome message, prompt selection)
+- `assets/chat.js` â€?Client-side chat logic (UI interactions, API calls, SSE handling, message rendering)
+- `assets/chat.css` â€?Chat widget styling (responsive, mobile-aware)
+
+## Live Chat Admin UI
+
+The merchant-facing live chat screen lives in `app/routes/app.live-chat.jsx`.
+
+- The current design is a 3-panel admin workspace: conversation queue on the left, active thread in the center, customer and order details on the right.
+- The route intentionally breaks out of Shopify's centered page container so it fills the embedded app width.
+- The layout should behave like a fixed-height workspace, not a long document.
+- Avoid page-level scrolling. Scrolling should stay inside:
+  - the conversation list
+  - the message thread
+- Keep the right details panel pinned within the available page height whenever possible.
+- Keep the composer visible at the bottom of the thread.
+- Sending a merchant reply while AI is active or a handoff is pending should first take over the conversation, then send the message.
+- Preserve the single-screen operator workflow: merchants should not need to scroll the full page to manage live chats.
 
 ## LLM Configuration
 
@@ -89,12 +104,34 @@ Default model is set in `app/services/config.server.js` (`AppConfig.api.defaultM
 
 When a customer asks a fitment/compatibility question on a product page:
 
-1. **Auto-search (Phase 2, parallel):** `chat.jsx` detects the fitment question + product page URL, fires `search_shop_catalog` with the product handle in parallel with customer MCP connection â€” adds zero extra latency
+1. **Auto-search (Phase 2, parallel):** `chat.jsx` detects the fitment question + product page URL, fires `search_shop_catalog` with the product handle in parallel with customer MCP connection â€?adds zero extra latency
 2. **Context injection:** Results are injected into conversation history as `[AUTO-SEARCHED PRODUCT CONTEXT]` so the AI has product details (title, SKU, description, tags) before its first turn
 3. **AI answers directly:** The system prompt instructs the AI to read the description for fitment data (format: "Year1-Year2, Make Model") and give a direct answer
 4. **Web verification (Layer 2):** If description data is ambiguous (e.g., year range is close but doesn't cover), the AI uses `web_search` to verify online
 5. **Alternative search:** If the product doesn't fit, the AI searches by PRODUCT CATEGORY ONLY (never vehicle info in query) with `fitment_search:true` context, gets 20 results, excludes current product, and filters by reading descriptions
 6. **Search suppression:** `onToolUse` in `chat.jsx` detects redundant searches (same product handle already in tool results) and skips them
+
+### Current Fitment UX Rules
+
+- Polling and history rendering in `extensions/chat-bubble/assets/chat.js` must parse structured message content and only render non-empty `text` blocks.
+- Do not render `tool_use` or `tool_result` payloads in storefront polling/history.
+- Preserve the original sender role when rendering polled messages; do not force assistant/system messages into `merchant` bubbles.
+- The `requestHuman()` storefront SSE path must stay in sync with the main `handleStreamEvent(...)` signature and stream-state handling. If that signature changes, update both paths.
+- Empty assistant bubbles during request-human flow are a regression. The storefront should only create visible assistant bubbles when real text content is present.
+- Fitment questions should return a direct text answer first: `Yes`, `No`, or `I can't confirm from the catalog data alone`.
+- Do not show product cards for fitment questions unless the customer explicitly asks to find or browse products.
+- Storefront customers should not see internal tool activity such as `Calling tool: ...`.
+- If a fitment turn uses tool activity but produces no visible assistant text, the storefront client shows a fallback fitment message instead of leaving a blank assistant bubble.
+- Fitment answers append a short source footnote at the end of the response:
+  - `Source: Shopify catalog`
+  - `Source: Web search`
+
+### Current Web Search Implementation
+
+- The app-level `web_search` tool is now backed by OpenAI's built-in web search via the Responses API in `app/services/websearch.server.js`.
+- This is not Shopify search and no longer uses DuckDuckGo.
+- The chat route still exposes `web_search` as an app tool name, but the server fulfills it through OpenAI.
+- `web_search` is timeout-limited in `app/routes/chat.jsx` using `AppConfig.timeouts.webSearchMs` to avoid long fitment stalls.
 
 ## Response Speed Optimizations
 
@@ -102,7 +139,7 @@ Target: time-to-first-token (TTFT) under 2 seconds. Key changes:
 
 - **Parallelized pre-stream ops** (`chat.jsx`): Phase 1 uses `Promise.allSettled` for independent operations; Phase 2 uses `Promise.all` for customer MCP + fitment auto-search
 - **Conversation history sliding window**: Capped at 20 messages (`AppConfig.conversation.maxHistoryMessages`) to prevent unbounded token growth
-- **Reduced max_completion_tokens**: 2000 â†’ 1200 (most responses well under this)
+- **Reduced max_completion_tokens**: 2000 â†?1200 (most responses well under this)
 - **Condensed system prompts**: Both prompt variants reduced ~40% (verbose formatting guidelines removed, fitment instructions compressed into decision tree)
 - **Removed debug logging**: All `fetch('http://127.0.0.1:7244/...')` debug log blocks removed from `chat.jsx`, `openai.server.js`, `env.server.js`, `streaming.server.js`
 - **Customer MCP timeout**: Reduced to 500ms with graceful fallback
@@ -112,7 +149,7 @@ Target: time-to-first-token (TTFT) under 2 seconds. Key changes:
 The storefront chat widget sends requests through the Shopify app proxy (`/apps/chat-agent/chat`). Key behaviors to know:
 
 - **Content-Type conversion**: The proxy converts `application/json` POST bodies to `application/x-www-form-urlencoded`. The `chat.jsx` handler parses both formats: tries `request.json()` if Content-Type is JSON, otherwise reads raw text and tries `JSON.parse` first, then falls back to `URLSearchParams`.
-- **Error masking**: If the app returns a non-200 status, the proxy replaces the response body with the store's themed HTML error page (~162KB). You will NOT see your server's error JSON â€” only a 500 + HTML. To debug, write errors to a local file (`chat-debug.log`) instead of relying on response bodies.
+- **Error masking**: If the app returns a non-200 status, the proxy replaces the response body with the store's themed HTML error page (~162KB). You will NOT see your server's error JSON â€?only a 500 + HTML. To debug, write errors to a local file (`chat-debug.log`) instead of relying on response bodies.
 - **SSE streaming**: Works through the proxy in dev mode, but may buffer in production. Monitor for issues.
 - **Stripped headers**: The proxy strips `Cookie` and `Authorization` from requests, and strips `Set-Cookie`, `Connection`, and ~17 other headers from responses.
 - **Added parameters**: The proxy adds `shop`, `logged_in_customer_id`, `path_prefix`, `timestamp`, `signature` as query parameters.
@@ -122,9 +159,9 @@ The storefront chat widget sends requests through the Shopify app proxy (`/apps/
 When the storefront chat shows infinite loading or "Sorry, I couldn't connect":
 
 1. **Check if the tunnel is alive**: Cloudflare tunnels expire. If the chat worked before but stopped, restart the dev server (`npm run dev`) to get a fresh tunnel. This is the #1 cause.
-2. **Verify locally**: `curl -X POST http://localhost:<port>/apps/chat-agent/chat -H "Content-Type: application/json" -d '{"message":"test","conversation_id":"debug1"}'` â€” if this returns 200 with SSE data, the server is fine and the issue is the tunnel/proxy.
-3. **Check the build**: Run `npx react-router build` â€” if it fails, the dev server may have broken routes. Common cause: importing `.server.js` modules at the top level of route files (see below).
-4. **Write debug logs to file**: The Shopify proxy masks server errors. Add `appendFileSync('chat-debug.log', ...)` in the request handler to capture what the proxy actually sends. Check if the log file is created after a storefront request â€” if not, the request never reached the server (tunnel issue).
+2. **Verify locally**: `curl -X POST http://localhost:<port>/apps/chat-agent/chat -H "Content-Type: application/json" -d '{"message":"test","conversation_id":"debug1"}'` â€?if this returns 200 with SSE data, the server is fine and the issue is the tunnel/proxy.
+3. **Check the build**: Run `npx react-router build` â€?if it fails, the dev server may have broken routes. Common cause: importing `.server.js` modules at the top level of route files (see below).
+4. **Write debug logs to file**: The Shopify proxy masks server errors. Add `appendFileSync('chat-debug.log', ...)` in the request handler to capture what the proxy actually sends. Check if the log file is created after a storefront request â€?if not, the request never reached the server (tunnel issue).
 
 ## React Router `.server.js` Import Rules
 
@@ -135,11 +172,11 @@ Server-only module referenced by client
 '../env.server.js' imported by route 'app/routes/chat.jsx'
 ```
 
-**Fix**: Remove the import. If env loading is needed, it's already handled by `app/entry.server.jsx` which runs before all routes. Named imports from `.server.js` inside `loader`/`action` are fine â€” React Router strips them automatically.
+**Fix**: Remove the import. If env loading is needed, it's already handled by `app/entry.server.jsx` which runs before all routes. Named imports from `.server.js` inside `loader`/`action` are fine â€?React Router strips them automatically.
 
 ## Testing
 
-`tests/chat-test.mjs` â€” Conversation testing agent:
+`tests/chat-test.mjs` â€?Conversation testing agent:
 ```bash
 node tests/chat-test.mjs                    # Basic speed test (requires dev server running)
 node tests/chat-test.mjs --judge            # With LLM quality judge (uses gpt-4o-mini)
@@ -153,7 +190,7 @@ Tests 5 scenarios: simple greeting, product search, fitment question, return pol
 
 ### Planning & Execution
 - Enter plan mode for ANY non-trivial task (3+ steps or architectural decisions).
-- If something goes sideways, STOP and re-plan immediately â€” don't keep pushing.
+- If something goes sideways, STOP and re-plan immediately â€?don't keep pushing.
 - Use plan mode for verification steps, not just building.
 - Write detailed specs upfront to reduce ambiguity.
 - Plan first: write plan to `tasks/todo.md` with checkable items. Check in before starting implementation. Mark items complete as you go. Add a review section to `tasks/todo.md` when done.
@@ -179,12 +216,12 @@ Tests 5 scenarios: simple greeting, product search, fitment question, return pol
 ### Elegance (Balanced)
 - For non-trivial changes: pause and ask "is there a more elegant way?"
 - If a fix feels hacky: "Knowing everything I know now, implement the elegant solution."
-- Skip this for simple, obvious fixes â€” don't over-engineer.
+- Skip this for simple, obvious fixes â€?don't over-engineer.
 - Challenge your own work before presenting it.
 
 ### Autonomous Bug Fixing
 - When given a bug report: just fix it. Don't ask for hand-holding.
-- Point at logs, errors, failing tests â€” then resolve them.
+- Point at logs, errors, failing tests â€?then resolve them.
 - Zero context switching required from the user.
 - Go fix failing CI tests without being told how.
 
@@ -192,3 +229,11 @@ Tests 5 scenarios: simple greeting, product search, fitment question, return pol
 - **Simplicity First**: Make every change as simple as possible. Impact minimal code.
 - **No Laziness**: Find root causes. No temporary fixes. Senior developer standards.
 - **Minimal Impact**: Changes should only touch what's necessary. Avoid introducing bugs.
+
+
+
+
+
+
+
+

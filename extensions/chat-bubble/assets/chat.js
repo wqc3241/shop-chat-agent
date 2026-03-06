@@ -625,6 +625,10 @@
           // Don't create initial message element yet - wait for first chunk or new_message event
           let currentMessageElement = null;
           let receivedAnyEvent = false;
+          const streamState = {
+            sawAssistantText: false,
+            sawToolUse: false,
+          };
 
           // Process the stream
           while (true) {
@@ -640,7 +644,7 @@
                 try {
                   const data = JSON.parse(line.slice(6));
                   receivedAnyEvent = true;
-                  this.handleStreamEvent(data, currentMessageElement, messagesContainer, userMessage,
+                  this.handleStreamEvent(data, currentMessageElement, messagesContainer, userMessage, streamState,
                     (newElement) => { currentMessageElement = newElement; });
                 } catch (e) {
                   console.error('Error parsing event data:', e, line);
@@ -673,7 +677,7 @@
        * @param {string} userMessage - The original user message
        * @param {Function} updateCurrentElement - Callback to update the current element reference
        */
-      handleStreamEvent: function(data, currentMessageElement, messagesContainer, userMessage, updateCurrentElement) {
+      handleStreamEvent: function(data, currentMessageElement, messagesContainer, userMessage, streamState, updateCurrentElement) {
         switch (data.type) {
           case 'id':
             if (data.conversation_id) {
@@ -682,6 +686,7 @@
             break;
 
           case 'chunk':
+            streamState.sawAssistantText = true;
             ShopAIChat.UI.removeTypingIndicator();
             // Create message element on first chunk if it doesn't exist
             if (!currentMessageElement) {
@@ -699,24 +704,48 @@
 
           case 'message_complete':
             ShopAIChat.UI.removeTypingIndicator();
-            ShopAIChat.Formatting.formatMessageContent(currentMessageElement);
-            ShopAIChat.UI.scrollToBottom();
+            if (currentMessageElement && currentMessageElement.dataset.rawText && currentMessageElement.dataset.rawText.trim() !== '') {
+              ShopAIChat.Formatting.formatMessageContent(currentMessageElement);
+              ShopAIChat.UI.scrollToBottom();
+            }
             break;
 
           case 'end_turn':
             ShopAIChat.UI.removeTypingIndicator();
+            if (currentMessageElement && (!currentMessageElement.dataset.rawText || currentMessageElement.dataset.rawText.trim() === '')) {
+              currentMessageElement.remove();
+              updateCurrentElement(null);
+            }
+            if (streamState.sawToolUse && !streamState.sawAssistantText) {
+              const isFitmentQuestion = /fit|fits|compatible|compatibility|will this work|does this fit|will it fit|vehicle|car|truck|suv/i.test(userMessage || '');
+              if (isFitmentQuestion) {
+                ShopAIChat.Message.add(
+                  "I can't confirm fitment from the catalog data alone. Ask me to verify further, or share the exact part you want checked.",
+                  'assistant',
+                  messagesContainer
+                );
+              }
+            }
             break;
 
           case 'error':
             console.error('Stream error:', data.error);
             ShopAIChat.UI.removeTypingIndicator();
-            currentMessageElement.textContent = "Sorry, I couldn't process your request. Please try again later.";
+            if (currentMessageElement) {
+              currentMessageElement.textContent = "Sorry, I couldn't process your request. Please try again later.";
+            } else {
+              ShopAIChat.Message.add("Sorry, I couldn't process your request. Please try again later.", 'assistant', messagesContainer);
+            }
             break;
 
           case 'rate_limit_exceeded':
             console.error('Rate limit exceeded:', data.error);
             ShopAIChat.UI.removeTypingIndicator();
-            currentMessageElement.textContent = "Sorry, our servers are currently busy. Please try again later.";
+            if (currentMessageElement) {
+              currentMessageElement.textContent = "Sorry, our servers are currently busy. Please try again later.";
+            } else {
+              ShopAIChat.Message.add("Sorry, our servers are currently busy. Please try again later.", 'assistant', messagesContainer);
+            }
             break;
 
           case 'auth_required':
@@ -742,9 +771,8 @@
             break;
 
           case 'tool_use':
-            if (data.tool_use_message) {
-              ShopAIChat.Message.addToolUse(data.tool_use_message, messagesContainer);
-            }
+            // Internal tool activity should not be shown to storefront customers.
+            streamState.sawToolUse = true;
             break;
 
           case 'new_message':
@@ -752,24 +780,8 @@
             if (currentMessageElement && currentMessageElement.dataset.rawText && currentMessageElement.dataset.rawText.trim() !== '') {
               ShopAIChat.Formatting.formatMessageContent(currentMessageElement);
               ShopAIChat.UI.showTypingIndicator();
-
-              // Create new message element for the next response
-              const newMessageElement = document.createElement('div');
-              newMessageElement.classList.add('shop-ai-message', 'assistant');
-              newMessageElement.textContent = '';
-              newMessageElement.dataset.rawText = '';
-              messagesContainer.appendChild(newMessageElement);
-
-              // Update the current element reference
-              updateCurrentElement(newMessageElement);
-            } else if (!currentMessageElement) {
-              // If no current element exists, create one
-              const newMessageElement = document.createElement('div');
-              newMessageElement.classList.add('shop-ai-message', 'assistant');
-              newMessageElement.textContent = '';
-              newMessageElement.dataset.rawText = '';
-              messagesContainer.appendChild(newMessageElement);
-              updateCurrentElement(newMessageElement);
+              updateCurrentElement(null);
+            } else {
               ShopAIChat.UI.showTypingIndicator();
             }
             break;
@@ -838,7 +850,7 @@
             try {
               const messageContents = JSON.parse(message.content);
               for (const contentBlock of messageContents) {
-                if (contentBlock.type === 'text') {
+                if (contentBlock.type === 'text' && typeof contentBlock.text === 'string' && contentBlock.text.trim() !== '') {
                   ShopAIChat.Message.add(contentBlock.text, role, messagesContainer);
                 }
               }
@@ -896,7 +908,23 @@
             // Render new merchant messages
             if (data.messages && data.messages.length > 0) {
               data.messages.forEach(msg => {
-                ShopAIChat.Message.add(msg.content, 'merchant', messagesContainer);
+                try {
+                  const messageContents = JSON.parse(msg.content);
+                  let renderedTextBlock = false;
+
+                  for (const contentBlock of messageContents) {
+                    if (contentBlock.type === 'text' && typeof contentBlock.text === 'string' && contentBlock.text.trim() !== '') {
+                      ShopAIChat.Message.add(contentBlock.text, msg.role, messagesContainer);
+                      renderedTextBlock = true;
+                    }
+                  }
+
+                  if (!renderedTextBlock && typeof msg.content === 'string' && msg.content.trim() !== '') {
+                    // Ignore structured non-text payloads like tool_use/tool_result during polling.
+                  }
+                } catch (e) {
+                  ShopAIChat.Message.add(msg.content, msg.role, messagesContainer);
+                }
                 this.lastTimestamp = msg.createdAt;
               });
             }
@@ -1321,6 +1349,10 @@
         const decoder = new TextDecoder();
         let buffer = '';
         let currentEl = null;
+        const streamState = {
+          sawAssistantText: false,
+          sawToolUse: false,
+        };
 
         const pump = async () => {
           const { value, done } = await reader.read();
@@ -1335,7 +1367,7 @@
             if (line.startsWith('data: ')) {
               try {
                 const data = JSON.parse(line.slice(6));
-                this.API.handleStreamEvent(data, currentEl, messagesContainer, '',
+                this.API.handleStreamEvent(data, currentEl, messagesContainer, "I'd like to talk to a person, please.", streamState,
                   (newEl) => { currentEl = newEl; });
               } catch { /* ignore */ }
             }

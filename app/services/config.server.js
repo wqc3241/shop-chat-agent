@@ -42,6 +42,7 @@ export const AppConfig = {
     storefrontMcpMs: 2000,      // Storefront MCP tools/list (2s, cache makes this rare)
     customerMcpMs: 500,          // Customer MCP tools/list (optional, graceful fallback)
     fitmentAutoSearchMs: 3000,   // Fitment auto-search tools/call (AI can retry via tool call)
+    webSearchMs: 2500,           // Built-in OpenAI web search fallback for unclear/current questions
   }
 };
 

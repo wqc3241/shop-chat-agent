@@ -309,6 +309,11 @@ async function handleChatSession({
     let productsToDisplay = [];
     let shouldReturnProductCardsOnly = false;
     let explicitSearchStatusMessage = "";
+    const shouldShowProductCards = isExplicitProductSearch;
+    const fitmentSourceUsed = {
+      shopify: Boolean(fitmentSearchResult),
+      web: false,
+    };
 
     // Format messages for OpenAI API
     const dbMessages = dbMessagesResult.status === 'fulfilled' ? dbMessagesResult.value : [];
@@ -364,7 +369,7 @@ async function handleChatSession({
 
         conversationHistory.push({
           role: 'user',
-          content: [{ type: 'text', text: `[AUTO-SEARCHED PRODUCT CONTEXT] Customer is viewing: ${currentPageUrl}. Product details:\n\n${productInfo}\n\nUse this to answer the customer's fitment/compatibility question.` }]
+          content: [{ type: 'text', text: `[AUTO-SEARCHED PRODUCT CONTEXT] Customer is viewing: ${currentPageUrl}. Product details:\n\n${productInfo}\n\nUse this to answer the customer's fitment/compatibility question.\n\nYour next customer-facing reply must start with exactly one of: "Yes", "No", or "I can't confirm from the catalog data alone". Do not mention internal tool calls.` }]
         });
         console.log('Added auto-searched product context to conversation history');
       } catch (error) {
@@ -444,7 +449,7 @@ async function handleChatSession({
         stream.sendMessage({ type: 'message_complete' });
       }
       stream.sendMessage({ type: 'end_turn' });
-      if (productsToDisplay.length > 0) {
+      if (shouldShowProductCards && productsToDisplay.length > 0) {
         stream.sendMessage({
           type: 'product_results',
           products: productsToDisplay
@@ -484,6 +489,26 @@ async function handleChatSession({
 
           // Handle complete messages
           onMessage: (message) => {
+            if (isFitmentQuestion && Array.isArray(message.content)) {
+              const firstTextBlock = message.content.find((block) => block.type === 'text' && typeof block.text === 'string' && block.text.trim() !== '');
+              if (firstTextBlock) {
+                const sourceLabel = fitmentSourceUsed.web
+                  ? 'Web search'
+                  : fitmentSourceUsed.shopify
+                    ? 'Shopify catalog'
+                    : null;
+
+                if (sourceLabel) {
+                  const footnote = `\n\nSource: ${sourceLabel}`;
+                  firstTextBlock.text += footnote;
+                  stream.sendMessage({
+                    type: 'chunk',
+                    chunk: footnote,
+                  });
+                }
+              }
+            }
+
             conversationHistory.push({
               role: message.role,
               content: message.content
@@ -503,6 +528,13 @@ async function handleChatSession({
             const toolName = content.name;
             let toolArgs = content.input || {};
             const toolUseId = content.id;
+
+            if (toolName === 'web_search') {
+              fitmentSourceUsed.web = true;
+            }
+            if (toolName === AppConfig.tools.productSearchName) {
+              fitmentSourceUsed.shopify = true;
+            }
 
             // Prevent the AI from re-searching the same product it already looked up
             // in a previous tool call within this conversation turn.
@@ -609,7 +641,17 @@ async function handleChatSession({
             // Call the tool (handle web search separately)
             let toolUseResponse;
             if (toolName === 'web_search') {
-              toolUseResponse = await executeWebSearch(toolArgs);
+              toolUseResponse = await withTimeout(
+                executeWebSearch(toolArgs),
+                AppConfig.timeouts.webSearchMs,
+                'web search timed out'
+              ).catch((error) => ({
+                error: {
+                  code: -32603,
+                  message: "Internal error",
+                  data: error.message || 'web search timed out',
+                },
+              }));
             } else {
               toolUseResponse = await mcpClient.callTool(toolName, toolArgs);
             }
@@ -697,7 +739,7 @@ async function handleChatSession({
     stream.sendMessage({ type: 'end_turn' });
 
     // Send product results if available
-    if (productsToDisplay.length > 0) {
+    if (shouldShowProductCards && productsToDisplay.length > 0) {
       stream.sendMessage({
         type: 'product_results',
         products: productsToDisplay
@@ -883,4 +925,3 @@ function withTimeout(promise, timeoutMs, timeoutMessage = "Operation timed out")
     ),
   ]);
 }
-
