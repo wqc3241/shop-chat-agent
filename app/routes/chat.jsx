@@ -447,6 +447,10 @@ async function handleChatSession({
           chunk: explicitSearchStatusMessage
         });
         stream.sendMessage({ type: 'message_complete' });
+
+        // Persist the assistant response so it appears in history and admin
+        saveMessage(conversationId, 'assistant', JSON.stringify([{ type: 'text', text: explicitSearchStatusMessage }]))
+          .catch((error) => console.error("Error saving product search response:", error));
       }
       stream.sendMessage({ type: 'end_turn' });
       if (shouldShowProductCards && productsToDisplay.length > 0) {
