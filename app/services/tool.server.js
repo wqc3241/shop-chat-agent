@@ -4,12 +4,13 @@
  */
 import { saveMessage } from "../db.server";
 import AppConfig from "./config.server";
+import { resolveProductHandles } from "./handle-resolver.server";
 
 /**
  * Creates a tool service instance
  * @returns {Object} Tool service with methods for managing tools
  */
-export function createToolService(storeDomain = '') {
+export function createToolService(storeDomain = '', shopHostname = '') {
   /**
    * Handles a tool error response
    * @param {Object} toolUseResponse - The error response from the tool
@@ -54,6 +55,11 @@ export function createToolService(storeDomain = '') {
 
       let processedProducts = processProductSearchResult(toolUseResponse, maxProducts);
 
+      // Resolve product handles via Admin API for products missing URLs
+      if (processedProducts.length > 0 && shopHostname) {
+        await resolveHandlesForProducts(processedProducts, shopHostname);
+      }
+
       // Exclude current product when searching for fitment alternatives
       if (currentProductHandle && isFitmentSearch) {
         processedProducts = processedProducts.filter(p =>
@@ -68,29 +74,11 @@ export function createToolService(storeDomain = '') {
       if (!isFitmentSearch) {
         productsToDisplay.push(...processedProducts);
       }
-      
-      // Enhance tool response content with formatted product information for AI reference
-      // This ensures the AI has access to all product details in a structured format
+
+      // Build a pre-formatted text summary so the AI can reference products
+      // without needing to interpret JSON or guess URLs. Products with real
+      // URLs get markdown links; products without get bold names only.
       if (toolUseResponse.content && processedProducts.length > 0) {
-        // Create enhanced content that includes both original response and formatted products
-        const originalContent = Array.isArray(toolUseResponse.content) 
-          ? toolUseResponse.content[0]?.text || toolUseResponse.content
-          : toolUseResponse.content;
-        
-        // Parse original content if it's a string
-        let parsedContent = originalContent;
-        if (typeof originalContent === 'string') {
-          try {
-            parsedContent = JSON.parse(originalContent);
-          } catch (e) {
-            // If parsing fails, keep as string
-            parsedContent = originalContent;
-          }
-        }
-        
-        // Build a pre-formatted text summary so the AI can reference products
-        // without needing to interpret JSON or guess URLs. Products with real
-        // URLs get markdown links; products without get bold names only.
         const productLines = processedProducts.map((product, i) => {
           const title = product.url
             ? `[${product.title}](${product.url})`
@@ -332,11 +320,38 @@ export function createToolService(storeDomain = '') {
     }
   };
 
+  /**
+   * Resolves product handles via Admin API and updates product URLs.
+   * @param {Array} products - Processed product array
+   * @param {string} hostname - Shop hostname for Admin API
+   * @returns {Promise<Array>} Products with resolved URLs
+   */
+  const resolveHandlesForProducts = async (products, hostname) => {
+    const gids = products
+      .filter(p => !p.url && p.id && p.id.startsWith('gid://'))
+      .map(p => p.id);
+
+    if (gids.length === 0) return products;
+
+    const handleMap = await resolveProductHandles(gids, hostname);
+    for (const product of products) {
+      if (!product.url && product.id && handleMap.has(product.id)) {
+        const handle = handleMap.get(product.id);
+        product.handle = handle;
+        product.url = storeBaseUrl
+          ? `${storeBaseUrl}/products/${handle}`
+          : `/products/${handle}`;
+      }
+    }
+    return products;
+  };
+
   return {
     handleToolError,
     handleToolSuccess,
     processProductSearchResult,
-    addToolResultToHistory
+    addToolResultToHistory,
+    resolveHandlesForProducts
   };
 }
 

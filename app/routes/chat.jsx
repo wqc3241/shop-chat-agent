@@ -188,7 +188,8 @@ async function handleChatSession({
   // Initialize MCP client
   const shopId = request.headers.get("X-Shopify-Shop-Id");
   const shopDomain = request.headers.get("Origin");
-  const toolService = createToolService(shopDomain || '');
+  // toolService is created below once shopHostname is derived
+  let toolService;
 
   // Create MCP client without customer endpoint initially (resolved in parallel below)
   const mcpClient = new MCPClient(shopDomain, conversationId, shopId, null);
@@ -220,11 +221,13 @@ async function handleChatSession({
       return;
     }
 
-    // Extract shop hostname for DB linking
+    // Extract shop hostname for DB linking and Admin API access
     let shopHostname = null;
     try {
       if (shopDomain) shopHostname = new URL(shopDomain).hostname;
     } catch { /* ignore parse errors */ }
+
+    toolService = createToolService(shopDomain || '', shopHostname || '');
 
     // Phase 1: Fire independent operations in parallel for faster TTFT
     // saveMessage → getConversationHistory must be sequential (history needs the saved message)
@@ -401,10 +404,16 @@ async function handleChatSession({
         const proactiveSearchResult = await mcpClient.callTool(AppConfig.tools.productSearchName, searchArgs);
 
         if (proactiveSearchResult && !proactiveSearchResult.error) {
-          const proactiveProducts = toolService.processProductSearchResult(
+          let proactiveProducts = toolService.processProductSearchResult(
             proactiveSearchResult,
             useFuzzyTopTen ? 10 : undefined
           );
+
+          // Resolve product handles via Admin API for URL generation
+          if (proactiveProducts.length > 0 && shopHostname && toolService.resolveHandlesForProducts) {
+            proactiveProducts = await toolService.resolveHandlesForProducts(proactiveProducts, shopHostname);
+          }
+
           if (proactiveProducts.length > 0) {
             productsToDisplay.push(...proactiveProducts);
             shouldReturnProductCardsOnly = true;
