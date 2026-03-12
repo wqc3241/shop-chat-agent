@@ -344,6 +344,13 @@
         // Clear input
         chatInput.value = '';
 
+        // Detect intent to talk to a human — route to handoff instead of AI
+        const currentMode = sessionStorage.getItem('shopAiChatMode');
+        if (currentMode !== 'merchant' && currentMode !== 'pending_merchant' && ShopAIChat.isHumanHandoffIntent(userMessage)) {
+          ShopAIChat.requestHuman(userMessage);
+          return;
+        }
+
         // Show typing indicator
         ShopAIChat.UI.showTypingIndicator();
 
@@ -1260,9 +1267,6 @@
 
       this.UI.init(container);
 
-      // Add "Talk to a person" link in the chat header
-      this.addHumanRequestLink(container);
-
       // Check for existing conversation
       const conversationId = sessionStorage.getItem('shopAiConversationId');
 
@@ -1286,45 +1290,47 @@
     },
 
     /**
-     * Add a "Talk to a person" link below the chat header
-     * @param {HTMLElement} container - The chat container
+     * Detect if a user message expresses intent to talk to a human
+     * @param {string} message - The user's message
+     * @returns {boolean}
      */
-    addHumanRequestLink: function(container) {
-      const header = container.querySelector('.shop-ai-chat-header');
-      if (!header) return;
-
-      const link = document.createElement('a');
-      link.href = '#';
-      link.className = 'shop-ai-request-human';
-      link.textContent = 'Talk to a person';
-      link.addEventListener('click', (e) => {
-        e.preventDefault();
-        this.requestHuman();
-      });
-
-      header.appendChild(link);
+    isHumanHandoffIntent: function(message) {
+      const normalized = message.toLowerCase().trim();
+      const patterns = [
+        /\b(talk|speak|chat)\b.*\b(person|human|agent|representative|rep|someone|somebody|staff|manager|support)\b/,
+        /\b(person|human|agent|representative|rep|someone|somebody|staff|manager|support)\b.*\b(talk|speak|chat)\b/,
+        /\b(want|need|get|connect|transfer)\b.*\b(human|person|agent|representative|rep|someone|real person|live agent|live chat|live support)\b/,
+        /\bhuman\s*(help|assistance|support|agent)\b/,
+        /\breal\s*person\b/,
+        /\blive\s*(agent|chat|support|person|representative)\b/,
+        /\btransfer\s*(me|to)\b/,
+        /\bconnect\s*me\b.*\b(agent|person|human|representative|support)\b/,
+        /\bno\b.*\b(bot|ai|robot|automated)\b/,
+        /\bstop\b.*\b(bot|ai)\b.*\b(talk|speak|chat)\b/,
+      ];
+      return patterns.some((pattern) => pattern.test(normalized));
     },
 
     /**
-     * Request a human agent
+     * Request a human agent — triggered by NLP intent detection
+     * @param {string} userMessage - The customer's original message
      */
-    requestHuman: function() {
+    requestHuman: function(userMessage) {
       const conversationId = sessionStorage.getItem('shopAiConversationId');
       const messagesContainer = this.UI.elements.messagesContainer;
 
       sessionStorage.setItem('shopAiChatMode', 'pending_merchant');
       this.ModeIndicator.update('pending_merchant');
 
-      // Send request_human flag to backend
+      // Send request_human flag to backend with the customer's actual message
       const requestBody = JSON.stringify({
-        message: "I'd like to talk to a person, please.",
+        message: userMessage,
         conversation_id: conversationId,
         request_human: true,
         current_page_url: window.location.href,
         prompt_type: window.shopChatConfig?.promptType || "standardAssistant",
       });
 
-      this.Message.add("I'd like to talk to a person, please.", 'user', messagesContainer);
       this.UI.showTypingIndicator();
 
       fetch('/apps/chat-agent/chat', {
@@ -1363,7 +1369,7 @@
             if (line.startsWith('data: ')) {
               try {
                 const data = JSON.parse(line.slice(6));
-                this.API.handleStreamEvent(data, currentEl, messagesContainer, "I'd like to talk to a person, please.", streamState,
+                this.API.handleStreamEvent(data, currentEl, messagesContainer, userMessage, streamState,
                   (newEl) => { currentEl = newEl; });
               } catch { /* ignore */ }
             }
