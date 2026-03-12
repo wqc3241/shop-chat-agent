@@ -91,12 +91,13 @@ export function createToolService(storeDomain = '') {
         // Add formatted products to the content for AI reference
         const enhancedContent = {
           ...parsedContent,
+          _instruction: "Only link to products that have a non-empty 'url' field. Never fabricate or guess product URLs.",
           formattedProducts: processedProducts.map(product => ({
             id: product.id,
             title: product.title,
             price: product.price,
             description: product.description,
-            url: product.url,
+            url: product.url || null,
             variants: product.variants,
             specifications: product.specifications,
             images: product.images,
@@ -293,15 +294,8 @@ export function createToolService(storeDomain = '') {
       return storeBaseUrl ? `${storeBaseUrl}${path}` : path;
     }
 
-    const title = typeof product.title === "string" ? product.title.trim() : "";
-    if (title) {
-      const inferredHandle = slugifyToHandle(title);
-      if (inferredHandle) {
-        const path = `/products/${inferredHandle}`;
-        return storeBaseUrl ? `${storeBaseUrl}${path}` : path;
-      }
-    }
-
+    // Do NOT guess URLs from product titles — slugified titles often don't
+    // match the actual Shopify handle, producing 404 links.
     return "";
   };
 
