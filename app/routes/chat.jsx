@@ -309,7 +309,7 @@ async function handleChatSession({
     let productsToDisplay = [];
     let shouldReturnProductCardsOnly = false;
     let explicitSearchStatusMessage = "";
-    const shouldShowProductCards = isExplicitProductSearch;
+    let shouldShowProductCards = isExplicitProductSearch;
     const fitmentSourceUsed = {
       shopify: Boolean(fitmentSearchResult),
       web: false,
@@ -706,6 +706,10 @@ async function handleChatSession({
                 toolArgs,
                 currentProductHandle
               );
+              // Show product cards when AI tool calls return products
+              if (productsToDisplay.length > 0) {
+                shouldShowProductCards = true;
+              }
             }
 
             // Signal new message to client

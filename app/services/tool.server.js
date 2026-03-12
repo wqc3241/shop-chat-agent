@@ -88,28 +88,23 @@ export function createToolService(storeDomain = '') {
           }
         }
         
-        // Add formatted products to the content for AI reference
-        const enhancedContent = {
-          ...parsedContent,
-          _instruction: "Only link to products that have a non-empty 'url' field. Never fabricate or guess product URLs.",
-          formattedProducts: processedProducts.map(product => ({
-            id: product.id,
-            title: product.title,
-            price: product.price,
-            description: product.description,
-            url: product.url || null,
-            variants: product.variants,
-            specifications: product.specifications,
-            images: product.images,
-            available: product.available,
-            tags: product.tags,
-            vendor: product.vendor,
-            productType: product.productType
-          }))
-        };
-        
-        // Add enhanced content to conversation history
-        await addToolResultToHistory(conversationHistory, toolUseId, enhancedContent, conversationId);
+        // Build a pre-formatted text summary so the AI can reference products
+        // without needing to interpret JSON or guess URLs. Products with real
+        // URLs get markdown links; products without get bold names only.
+        const productLines = processedProducts.map((product, i) => {
+          const title = product.url
+            ? `[${product.title}](${product.url})`
+            : `**${product.title}**`;
+          const desc = product.description
+            ? `\n   ${product.description.slice(0, 200)}${product.description.length > 200 ? '...' : ''}`
+            : '';
+          const avail = product.available === false ? ' (Out of stock)' : '';
+          return `${i + 1}. ${title} — ${product.price}${avail}${desc}`;
+        }).join('\n\n');
+
+        const enhancedText = `Product search results (${processedProducts.length} found):\n\n${productLines}\n\nDo NOT add links to products that don't have links above. Do NOT use '#' as a URL.`;
+
+        await addToolResultToHistory(conversationHistory, toolUseId, enhancedText, conversationId);
         return;
       }
     }
@@ -242,13 +237,10 @@ export function createToolService(storeDomain = '') {
       availableForSale: product.availableForSale !== undefined ? product.availableForSale : null,
       
       // Additional metadata
-      handle: product.handle || product?._raw?.handle || null,
+      handle: product.handle || null,
       createdAt: product.createdAt || null,
       updatedAt: product.updatedAt || null
     };
-
-    // Include full raw product data for reference (useful for detailed queries)
-    formattedProduct._raw = product;
 
     return formattedProduct;
   };
