@@ -184,11 +184,11 @@ async function handleChatSession({
   expectedMode,
 }) {
   const openaiService = createOpenAIService();
-  const toolService = createToolService();
 
   // Initialize MCP client
   const shopId = request.headers.get("X-Shopify-Shop-Id");
   const shopDomain = request.headers.get("Origin");
+  const toolService = createToolService(shopDomain || '');
 
   // Create MCP client without customer endpoint initially (resolved in parallel below)
   const mcpClient = new MCPClient(shopDomain, conversationId, shopId, null);

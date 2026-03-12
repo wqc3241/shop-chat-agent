@@ -9,7 +9,7 @@ import AppConfig from "./config.server";
  * Creates a tool service instance
  * @returns {Object} Tool service with methods for managing tools
  */
-export function createToolService() {
+export function createToolService(storeDomain = '') {
   /**
    * Handles a tool error response
    * @param {Object} toolUseResponse - The error response from the tool
@@ -252,6 +252,19 @@ export function createToolService() {
     return formattedProduct;
   };
 
+  // Derive the store base URL (e.g. "https://dev-nlp-brochure.myshopify.com")
+  // from the Origin header passed via createToolService(storeDomain).
+  let storeBaseUrl = '';
+  if (storeDomain) {
+    try {
+      const parsed = new URL(storeDomain);
+      storeBaseUrl = parsed.origin; // "https://example.myshopify.com"
+    } catch {
+      // If it's just a hostname like "dev-nlp-brochure.myshopify.com"
+      storeBaseUrl = `https://${storeDomain.replace(/^https?:\/\//, '')}`;
+    }
+  }
+
   const buildProductUrl = (product) => {
     const directUrl =
       product.url ||
@@ -261,7 +274,10 @@ export function createToolService() {
       "";
 
     if (typeof directUrl === "string" && directUrl.trim() !== "") {
-      return directUrl;
+      // If it's already absolute, return as-is
+      if (directUrl.startsWith('http')) return directUrl;
+      // If relative, prepend store domain
+      return storeBaseUrl ? `${storeBaseUrl}${directUrl.startsWith('/') ? '' : '/'}${directUrl}` : directUrl;
     }
 
     const handle =
@@ -273,13 +289,17 @@ export function createToolService() {
       "";
 
     if (typeof handle === "string" && handle.trim() !== "") {
-      return `/products/${handle.trim()}`;
+      const path = `/products/${handle.trim()}`;
+      return storeBaseUrl ? `${storeBaseUrl}${path}` : path;
     }
 
     const title = typeof product.title === "string" ? product.title.trim() : "";
     if (title) {
       const inferredHandle = slugifyToHandle(title);
-      if (inferredHandle) return `/products/${inferredHandle}`;
+      if (inferredHandle) {
+        const path = `/products/${inferredHandle}`;
+        return storeBaseUrl ? `${storeBaseUrl}${path}` : path;
+      }
     }
 
     return "";
