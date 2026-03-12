@@ -875,8 +875,9 @@
           const welcomeMessage = window.shopChatConfig?.welcomeMessage || "👋 Hi there! How can I help you today?";
           ShopAIChat.Message.add(welcomeMessage, 'assistant', messagesContainer);
 
-          // Clear the conversation ID since we couldn't fetch this conversation
-          sessionStorage.removeItem('shopAiConversationId');
+          // Do NOT clear the conversation ID here. The ID is still valid in the database;
+          // the fetch may have failed due to a transient network error or proxy issue.
+          // Clearing it would permanently lose the conversation for the user on any blip.
         }
       }
     },
