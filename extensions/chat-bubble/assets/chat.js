@@ -1315,11 +1315,6 @@
       sessionStorage.setItem('shopAiChatMode', 'pending_merchant');
       this.ModeIndicator.update('pending_merchant');
 
-      // Start polling so customer sees merchant messages once agent joins
-      if (conversationId && messagesContainer) {
-        this.Polling.start(conversationId, messagesContainer);
-      }
-
       // Send request_human flag to backend
       const requestBody = JSON.stringify({
         message: "I'd like to talk to a person, please.",
@@ -1375,9 +1370,18 @@
           }
           return pump();
         };
-        return pump();
+        return pump().then(() => {
+          // Start polling after SSE stream ends to avoid duplicate AI messages
+          if (conversationId && messagesContainer) {
+            ShopAIChat.Polling.start(conversationId, messagesContainer);
+          }
+        });
       }).catch(() => {
         this.UI.removeTypingIndicator();
+        // Start polling even on error so customer can still see merchant messages
+        if (conversationId && messagesContainer) {
+          ShopAIChat.Polling.start(conversationId, messagesContainer);
+        }
       });
     }
   };
