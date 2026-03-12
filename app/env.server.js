@@ -54,3 +54,20 @@ export function verifyEnvVars() {
     loaded: loaded,
   };
 }
+
+/**
+ * Validate that all required environment variables are present.
+ * Throws a descriptive error at startup if any are missing.
+ */
+export function validateRequiredEnvVars() {
+  const missing = [];
+  if (!process.env.OPENAI_API_KEY) missing.push('OPENAI_API_KEY');
+  if (!process.env.SHOPIFY_API_KEY) missing.push('SHOPIFY_API_KEY');
+
+  if (missing.length > 0) {
+    const message = `Missing required environment variables: ${missing.join(', ')}. ` +
+      `Add them to your .env file and restart the server.`;
+    console.error(`[ENV ERROR] ${message}`);
+    throw new Error(message);
+  }
+}

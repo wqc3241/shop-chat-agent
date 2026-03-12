@@ -673,10 +673,42 @@ export default function LiveChat() {
                   </button>
                   <button
                     type="button"
-                    disabled
-                    style={{ width: "100%", borderRadius: "10px", border: "1px solid #d1d5db", backgroundColor: "#ffffff", color: "#475569", padding: "10px 12px", fontSize: "14px" }}
+                    onClick={async () => {
+                      if (!selectedId) return;
+                      try {
+                        const res = await fetch(`/app/api/conversations/${selectedId}/handoff`, {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ action: "resolve" }),
+                        });
+                        const data = await res.json();
+                        if (!data.success) {
+                          alert(data.error || "Failed to resolve conversation");
+                          return;
+                        }
+                        setSelectedConv((prev) =>
+                          prev ? { ...prev, mode: "ai", assignedTo: null, resolvedAt: data.resolvedAt } : prev
+                        );
+                        const messageData = await fetchMessages(selectedId);
+                        if (messageData) setMessages(messageData.messages || []);
+                      } catch (error) {
+                        alert(`Error: ${error.message}`);
+                      }
+                    }}
+                    disabled={!!selectedConv.resolvedAt}
+                    style={{
+                      width: "100%",
+                      borderRadius: "10px",
+                      border: selectedConv.resolvedAt ? "1px solid #bbf7d0" : "1px solid #d1d5db",
+                      backgroundColor: selectedConv.resolvedAt ? "#dcfce7" : "#ffffff",
+                      color: selectedConv.resolvedAt ? "#16a34a" : "#475569",
+                      padding: "10px 12px",
+                      fontSize: "14px",
+                      fontWeight: selectedConv.resolvedAt ? 600 : 400,
+                      cursor: selectedConv.resolvedAt ? "default" : "pointer",
+                    }}
                   >
-                    Mark as Resolved
+                    {selectedConv.resolvedAt ? "Resolved" : "Mark as Resolved"}
                   </button>
                 </div>
               </div>

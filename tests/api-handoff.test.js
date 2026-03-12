@@ -158,6 +158,6 @@ describe('Handoff API Route', () => {
     expect(result).toBeInstanceOf(Response);
     expect(result.status).toBe(400);
     const body = await result.json();
-    expect(body.error).toContain("'take_over' or 'release'");
+    expect(body.error).toContain("Invalid action");
   });
 });

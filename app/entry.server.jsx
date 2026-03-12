@@ -1,4 +1,7 @@
-import "./env.server.js"; // Ensure environment variables are loaded
+import { validateRequiredEnvVars } from "./env.server.js";
+
+// Validate env vars at startup — fails fast with clear error
+validateRequiredEnvVars();
 import { PassThrough } from "stream";
 import { renderToPipeableStream } from "react-dom/server";
 import { ServerRouter } from "react-router";

@@ -73,11 +73,39 @@ export function createStreamManager(encoder, controller) {
     }
   };
 
+  let keepaliveInterval = null;
+
+  /**
+   * Start sending SSE comments every 15 seconds to prevent proxy timeouts
+   */
+  const startKeepalive = () => {
+    keepaliveInterval = setInterval(() => {
+      try {
+        controller.enqueue(encoder.encode(': keepalive\n\n'));
+      } catch (error) {
+        // Stream likely closed; clean up silently
+        stopKeepalive();
+      }
+    }, 15000);
+  };
+
+  /**
+   * Stop the keepalive interval
+   */
+  const stopKeepalive = () => {
+    if (keepaliveInterval) {
+      clearInterval(keepaliveInterval);
+      keepaliveInterval = null;
+    }
+  };
+
   return {
     sendMessage,
     sendError,
     closeStream,
-    handleStreamingError
+    handleStreamingError,
+    startKeepalive,
+    stopKeepalive
   };
 }
 
@@ -92,12 +120,14 @@ export function createSseStream(streamHandler) {
   return new ReadableStream({
     async start(controller) {
       const streamManager = createStreamManager(encoder, controller);
-      
+
       try {
+        streamManager.startKeepalive();
         await streamHandler(streamManager);
       } catch (error) {
         streamManager.handleStreamingError(error);
       } finally {
+        streamManager.stopKeepalive();
         streamManager.closeStream();
       }
     }

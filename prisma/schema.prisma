@@ -62,6 +62,7 @@ model Conversation {
   mode          String    @default("ai") // "ai" | "merchant" | "pending_merchant"
   assignedTo    String?   // merchant staff identifier
   handoffAt     DateTime? // when merchant took over
+  resolvedAt    DateTime?
   messages      Message[]
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt

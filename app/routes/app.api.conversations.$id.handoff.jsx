@@ -1,5 +1,5 @@
 import { authenticate } from "../shopify.server";
-import { getConversation, takeOverConversation, releaseConversation, saveMessage } from "../db.server";
+import { getConversation, takeOverConversation, releaseConversation, resolveConversation, saveMessage } from "../db.server";
 
 /**
  * POST: Handle conversation handoff actions (take_over / release)
@@ -50,5 +50,17 @@ export const action = async ({ request, params }) => {
     return { success: true, mode: 'ai', conversation: result };
   }
 
-  return new Response(JSON.stringify({ error: "Invalid action. Use 'take_over' or 'release'." }), { status: 400 });
+  if (actionType === 'resolve') {
+    const result = await resolveConversation(conversationId);
+    if (!result) {
+      return new Response(JSON.stringify({ error: "Failed to resolve conversation" }), { status: 500 });
+    }
+
+    // Insert system message so it's visible in history
+    await saveMessage(conversationId, 'assistant', 'This conversation has been marked as resolved.');
+
+    return { success: true, mode: 'ai', resolvedAt: result.resolvedAt, conversation: result };
+  }
+
+  return new Response(JSON.stringify({ error: "Invalid action. Use 'take_over', 'release', or 'resolve'." }), { status: 400 });
 };

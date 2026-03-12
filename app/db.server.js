@@ -373,6 +373,28 @@ export async function takeOverConversation(id, merchantId) {
 }
 
 /**
+ * Resolve a conversation — sets it back to AI mode and marks it as resolved
+ * @param {string} id - The conversation ID
+ * @returns {Promise<Object|null>} The updated conversation or null
+ */
+export async function resolveConversation(id) {
+  try {
+    return await prisma.conversation.update({
+      where: { id },
+      data: {
+        resolvedAt: new Date(),
+        mode: 'ai',
+        assignedTo: null,
+        handoffAt: null,
+      },
+    });
+  } catch (error) {
+    console.error('Error resolving conversation:', error);
+    return null;
+  }
+}
+
+/**
  * Release a conversation back to AI
  * @param {string} id - The conversation ID
  * @returns {Promise<Object|null>} Updated conversation
