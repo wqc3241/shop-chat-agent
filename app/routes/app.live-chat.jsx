@@ -493,10 +493,9 @@ export default function LiveChat() {
               </div>
 
               <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "14px 16px 18px" }}>
-                {messages.filter((message) => {
+                {messages.map((message) => {
                   const text = parseContent(message.content);
-                  return text && text.trim().length > 0;
-                }).map((message) => {
+                  if (!text || !text.trim()) return null;
                   const meta = getMessageMeta(message.role);
                   return (
                     <div key={message.id} style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "12px", marginBottom: "14px", alignItems: "start" }}>
@@ -522,7 +521,7 @@ export default function LiveChat() {
                             whiteSpace: "pre-wrap",
                           }}
                         >
-                          {parseContent(message.content)}
+                          {text}
                         </div>
                       </div>
                     </div>
