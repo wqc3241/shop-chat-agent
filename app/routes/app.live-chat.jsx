@@ -157,8 +157,10 @@ export default function LiveChat() {
   const [inputValue, setInputValue] = useState("");
   const [sending, setSending] = useState(false);
   const [tab, setTab] = useState("all");
+  const [customerActivity, setCustomerActivity] = useState(null);
   const messagesEndRef = useRef(null);
   const pollTimerRef = useRef(null);
+  const activityTimerRef = useRef(null);
   const listTimerRef = useRef(null);
   const latestMessageAtRef = useRef(null);
 
@@ -252,6 +254,23 @@ export default function LiveChat() {
       clearInterval(pollTimerRef.current);
     };
   }, [fetchMessages, selectedId]);
+
+  // Poll customer activity every 3 seconds when a conversation is selected
+  useEffect(() => {
+    if (!selectedId) { setCustomerActivity(null); return; }
+    let cancelled = false;
+    const fetchActivity = async () => {
+      try {
+        const res = await fetch(`/app/api/conversations/${selectedId}/activity`);
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (!cancelled) setCustomerActivity(data.activity || null);
+      } catch { /* ignore */ }
+    };
+    fetchActivity();
+    activityTimerRef.current = setInterval(fetchActivity, 3000);
+    return () => { cancelled = true; clearInterval(activityTimerRef.current); };
+  }, [selectedId]);
 
   const handleTakeOver = useCallback(async () => {
     if (!selectedId) return false;
@@ -522,6 +541,11 @@ export default function LiveChat() {
                           }}
                         >
                           {text}
+                          {message.role === "assistant" && message.feedback && (
+                            <span style={{ marginLeft: "8px", fontSize: "12px", opacity: 0.7 }}>
+                              {message.feedback === "good" ? "\uD83D\uDC4D" : "\uD83D\uDC4E"}
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -715,6 +739,67 @@ export default function LiveChat() {
                   </button>
                 </div>
               </div>
+
+              {/* Customer Activity */}
+              {customerActivity && (
+                <div style={{ borderTop: "1px solid #e5e7eb", paddingTop: "14px", overflowY: "auto", flex: 1, minHeight: 0 }}>
+                  <div style={{ fontSize: "15px", fontWeight: 700, color: "#0f172a", marginBottom: "10px" }}>Live Activity</div>
+
+                  {/* Current Page */}
+                  {customerActivity.currentPageUrl && (
+                    <div style={{ marginBottom: "10px" }}>
+                      <div style={{ fontSize: "12px", fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.5px" }}>Browsing</div>
+                      <div style={{ fontSize: "13px", color: "#0f172a", marginTop: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={customerActivity.currentPageUrl}>
+                        {customerActivity.currentPageTitle || customerActivity.currentPageUrl}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Viewing Product */}
+                  {customerActivity.viewingProduct && (() => {
+                    try {
+                      const p = JSON.parse(customerActivity.viewingProduct);
+                      if (!p.title) return null;
+                      return (
+                        <div style={{ marginBottom: "10px" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.5px" }}>Viewing Product</div>
+                          <div style={{ display: "flex", gap: "8px", marginTop: "4px", alignItems: "center" }}>
+                            {p.image && <img src={p.image} alt="" style={{ width: "36px", height: "36px", borderRadius: "6px", objectFit: "cover" }} />}
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontSize: "13px", fontWeight: 500, color: "#0f172a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</div>
+                              {p.price && <div style={{ fontSize: "12px", color: "#5046e4", fontWeight: 600 }}>${p.price}</div>}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    } catch { return null; }
+                  })()}
+
+                  {/* Cart Contents */}
+                  {customerActivity.cartContents && (() => {
+                    try {
+                      const items = JSON.parse(customerActivity.cartContents);
+                      if (!items.length) return null;
+                      return (
+                        <div style={{ marginBottom: "10px" }}>
+                          <div style={{ fontSize: "12px", fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                            Cart ({items.length} {items.length === 1 ? "item" : "items"})
+                          </div>
+                          <div style={{ marginTop: "4px", display: "flex", flexDirection: "column", gap: "4px" }}>
+                            {items.slice(0, 5).map((item, i) => (
+                              <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: "13px", color: "#334155" }}>
+                                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>{item.title}</span>
+                                <span style={{ flexShrink: 0, marginLeft: "8px", color: "#64748b" }}>x{item.quantity} ${item.price}</span>
+                              </div>
+                            ))}
+                            {items.length > 5 && <div style={{ fontSize: "12px", color: "#94a3b8" }}>+{items.length - 5} more</div>}
+                          </div>
+                        </div>
+                      );
+                    } catch { return null; }
+                  })()}
+                </div>
+              )}
 
               <div style={{ borderTop: "1px solid #e5e7eb", paddingTop: "14px", color: "#64748b", fontSize: "14px", marginTop: "auto" }}>
                 Conversation started {timeAgo(selectedConv.createdAt)}

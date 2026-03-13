@@ -77,7 +77,13 @@ model ChatSettings {
   welcomeMessage     String   @default("👋 Hi there! How can I help you today?")
   promptType         String   @default("standardAssistant")
   customInstructions String   @default("")
+  returnPolicy       String   @default("")
+  contactInfo        String   @default("")
   bubbleColor        String   @default("#5046e4")
+  supportHoursStart  String   @default("")
+  supportHoursEnd    String   @default("")
+  supportTimezone    String   @default("America/New_York")
+  supportDays        String   @default("Mon,Tue,Wed,Thu,Fri")
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 }
@@ -88,6 +94,7 @@ model Message {
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   role           String       // "user" or "assistant"
   content        String
+  feedback       String?      // "good" | "bad" | null
   createdAt      DateTime     @default(now())
 
   @@index([conversationId])
@@ -101,5 +108,15 @@ model CustomerAccountUrls {
   authorizationUrl String?
   tokenUrl         String?
   createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+}
+
+model CustomerActivity {
+  id               String    @id @default(cuid())
+  conversationId   String    @unique
+  currentPageUrl   String    @default("")
+  currentPageTitle String    @default("")
+  viewingProduct   String    @default("")
+  cartContents     String    @default("")
   updatedAt        DateTime  @updatedAt
 }

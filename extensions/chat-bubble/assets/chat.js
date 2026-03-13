@@ -133,6 +133,8 @@
           }
           // Always scroll messages to bottom when opening
           this.scrollToBottom();
+          // Start activity tracking
+          ShopAIChat.Activity.start();
         } else {
           // Remove body class when closing
           document.body.classList.remove('shop-ai-chat-open');
@@ -147,6 +149,7 @@
 
         chatWindow.classList.remove('active');
         ShopAIChat.Voice.stopListening();
+        ShopAIChat.Activity.stop();
 
         // On mobile, blur input to hide keyboard and enable body scrolling
         if (this.isMobile) {
@@ -709,6 +712,14 @@
             ShopAIChat.UI.scrollToBottom();
             break;
 
+          case 'message_id':
+            // Associate the message ID with the current assistant element for feedback
+            if (currentMessageElement && data.message_id) {
+              currentMessageElement.dataset.messageId = data.message_id;
+              ShopAIChat.Feedback.addButtons(currentMessageElement);
+            }
+            break;
+
           case 'message_complete':
             ShopAIChat.UI.removeTypingIndicator();
             if (currentMessageElement && currentMessageElement.dataset.rawText && currentMessageElement.dataset.rawText.trim() !== '') {
@@ -796,6 +807,17 @@
           case 'content_block_complete':
             ShopAIChat.UI.showTypingIndicator();
             break;
+
+          case 'support_unavailable':
+            ShopAIChat.Message.add(
+              'Our support team is available ' + (data.days || 'Mon-Fri') +
+              ' from ' + (data.hours || '9:00-17:00') +
+              ' (' + (data.timezone || 'ET').replace(/^America\//, '').replace(/_/g, ' ') +
+              '). I\'ll keep helping you in the meantime!',
+              'assistant',
+              messagesContainer
+            );
+            break;
         }
       },
 
@@ -854,15 +876,27 @@
           // Add messages to the UI - filter out tool results
           data.messages.forEach(message => {
             const role = message.role;
+            let el;
             try {
               const messageContents = JSON.parse(message.content);
               for (const contentBlock of messageContents) {
                 if (contentBlock.type === 'text' && typeof contentBlock.text === 'string' && contentBlock.text.trim() !== '') {
-                  ShopAIChat.Message.add(contentBlock.text, role, messagesContainer);
+                  el = ShopAIChat.Message.add(contentBlock.text, role, messagesContainer);
                 }
               }
             } catch (e) {
-              ShopAIChat.Message.add(message.content, role, messagesContainer);
+              el = ShopAIChat.Message.add(message.content, role, messagesContainer);
+            }
+            // Add feedback buttons to assistant messages from history
+            if (el && role === 'assistant' && message.id) {
+              el.dataset.messageId = message.id;
+              if (message.feedback) {
+                // Show existing feedback state
+                ShopAIChat.Feedback.addButtons(el);
+                ShopAIChat.Feedback.showExisting(el, message.feedback);
+              } else {
+                ShopAIChat.Feedback.addButtons(el);
+              }
             }
           });
 
@@ -886,6 +920,160 @@
           // the fetch may have failed due to a transient network error or proxy issue.
           // Clearing it would permanently lose the conversation for the user on any blip.
         }
+      }
+    },
+
+    /**
+     * Feedback buttons (thumbs up/down) on assistant messages
+     */
+    Feedback: {
+      addButtons: function(messageElement) {
+        if (!messageElement || messageElement.querySelector('.shop-ai-feedback')) return;
+        const wrapper = document.createElement('div');
+        wrapper.className = 'shop-ai-feedback';
+        wrapper.innerHTML =
+          '<button class="shop-ai-feedback-btn" data-value="good" title="Good answer">&#128077;</button>' +
+          '<button class="shop-ai-feedback-btn" data-value="bad" title="Bad answer">&#128078;</button>';
+        wrapper.querySelectorAll('.shop-ai-feedback-btn').forEach(function(btn) {
+          btn.addEventListener('click', function() {
+            ShopAIChat.Feedback.submit(messageElement, btn.dataset.value);
+          });
+        });
+        messageElement.appendChild(wrapper);
+      },
+
+      showExisting: function(messageElement, feedback) {
+        var wrapper = messageElement.querySelector('.shop-ai-feedback');
+        if (!wrapper) return;
+        wrapper.querySelectorAll('.shop-ai-feedback-btn').forEach(function(btn) {
+          btn.disabled = true;
+          if (btn.dataset.value === feedback) {
+            btn.classList.add('selected');
+          } else {
+            btn.style.opacity = '0.3';
+          }
+        });
+      },
+
+      submit: function(messageElement, value) {
+        var messageId = messageElement.dataset.messageId;
+        if (!messageId) return;
+        // Disable buttons and show selected state
+        var wrapper = messageElement.querySelector('.shop-ai-feedback');
+        if (wrapper) {
+          wrapper.querySelectorAll('.shop-ai-feedback-btn').forEach(function(btn) {
+            btn.disabled = true;
+            if (btn.dataset.value === value) {
+              btn.classList.add('selected');
+            } else {
+              btn.style.opacity = '0.3';
+            }
+          });
+        }
+        // Send feedback to server
+        var feedbackUrl = '/apps/chat-agent/chat?feedback=true&message_id=' +
+          encodeURIComponent(messageId) + '&value=' + encodeURIComponent(value);
+        fetch(feedbackUrl, { method: 'GET', mode: 'cors' }).catch(function(err) {
+          console.error('Feedback submit error:', err);
+        });
+      }
+    },
+
+    /**
+     * Customer activity tracker — sends page/cart/product context to backend
+     */
+    Activity: {
+      timer: null,
+      lastPayload: '',
+
+      start: function() {
+        this.stop();
+        this.send(); // immediate first send
+        this.timer = setInterval(function() { ShopAIChat.Activity.send(); }, 5000);
+      },
+
+      stop: function() {
+        if (this.timer) { clearInterval(this.timer); this.timer = null; }
+      },
+
+      send: function() {
+        var convId = sessionStorage.getItem('shopAiConversationId');
+        if (!convId) return;
+
+        var payload = {
+          currentPageUrl: window.location.href,
+          currentPageTitle: document.title,
+          viewingProduct: this.getProductInfo(),
+          cartContents: '', // filled async below
+        };
+
+        // Fetch cart asynchronously
+        fetch('/cart.js', { method: 'GET', headers: { 'Accept': 'application/json' } })
+          .then(function(res) { return res.json(); })
+          .then(function(cart) {
+            payload.cartContents = JSON.stringify((cart.items || []).map(function(item) {
+              return {
+                title: item.title,
+                quantity: item.quantity,
+                price: (item.price / 100).toFixed(2),
+                image: item.image,
+                variantTitle: item.variant_title,
+                url: item.url,
+              };
+            }));
+            ShopAIChat.Activity._sendToServer(convId, payload);
+          })
+          .catch(function() {
+            // Cart fetch failed (possibly not a Shopify storefront); send without cart
+            ShopAIChat.Activity._sendToServer(convId, payload);
+          });
+      },
+
+      _sendToServer: function(convId, payload) {
+        var serialized = JSON.stringify(payload);
+        if (serialized === this.lastPayload) return; // no change
+        this.lastPayload = serialized;
+
+        var params = new URLSearchParams({
+          activity: 'true',
+          conversation_id: convId,
+          currentPageUrl: payload.currentPageUrl,
+          currentPageTitle: payload.currentPageTitle,
+          viewingProduct: payload.viewingProduct,
+          cartContents: payload.cartContents,
+        });
+        fetch('/apps/chat-agent/chat?' + params.toString(), { method: 'GET', mode: 'cors' })
+          .catch(function(err) { console.error('Activity send error:', err); });
+      },
+
+      getProductInfo: function() {
+        // Try to detect product info from structured data or meta tags
+        var productData = {};
+        try {
+          var ldJson = document.querySelector('script[type="application/ld+json"]');
+          if (ldJson) {
+            var parsed = JSON.parse(ldJson.textContent);
+            if (parsed['@type'] === 'Product' || (Array.isArray(parsed['@graph']) && parsed['@graph'].find(function(g) { return g['@type'] === 'Product'; }))) {
+              var product = parsed['@type'] === 'Product' ? parsed : parsed['@graph'].find(function(g) { return g['@type'] === 'Product'; });
+              productData = {
+                title: product.name || '',
+                image: (product.image && product.image[0]) || '',
+                price: product.offers ? (product.offers.price || product.offers.lowPrice || '') : '',
+                url: product.url || window.location.href,
+              };
+            }
+          }
+        } catch (e) { /* ignore parse errors */ }
+
+        // Fallback: check meta tags
+        if (!productData.title) {
+          var ogTitle = document.querySelector('meta[property="og:title"]');
+          if (ogTitle) productData.title = ogTitle.content || '';
+          var ogImage = document.querySelector('meta[property="og:image"]');
+          if (ogImage) productData.image = ogImage.content || '';
+        }
+
+        return window.location.pathname.includes('/products/') ? JSON.stringify(productData) : '';
       }
     },
 

@@ -664,6 +664,41 @@
     color: #fff;
   }
 
+  /* Feedback buttons */
+  .shop-ai-feedback {
+    display: flex;
+    gap: 4px;
+    margin-top: 6px;
+    justify-content: flex-start;
+  }
+
+  .shop-ai-feedback-btn {
+    background: none;
+    border: 1px solid #ddd;
+    border-radius: 14px;
+    padding: 2px 8px;
+    font-size: 14px;
+    cursor: pointer;
+    opacity: 0.6;
+    transition: opacity 0.2s, background-color 0.2s;
+    line-height: 1.4;
+  }
+
+  .shop-ai-feedback-btn:hover:not(:disabled) {
+    opacity: 1;
+    background-color: #f0f0f0;
+  }
+
+  .shop-ai-feedback-btn:disabled {
+    cursor: default;
+  }
+
+  .shop-ai-feedback-btn.selected {
+    opacity: 1;
+    background-color: #e8e8ff;
+    border-color: #5046e4;
+  }
+
   @keyframes typing {
     0% {
       opacity: 0.4;

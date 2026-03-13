@@ -3,7 +3,7 @@
  * Handles chat interactions with OpenAI API and tools
  */
 import MCPClient from "../mcp-client";
-import { saveMessage, getConversationHistory, storeCustomerAccountUrls, getCustomerAccountUrls as getCustomerAccountUrlsFromDb, updateConversationMeta, updateConversationOrders, getChatSettings, getConversation, getMessagesSince, updateConversation } from "../db.server";
+import { saveMessage, getConversationHistory, storeCustomerAccountUrls, getCustomerAccountUrls as getCustomerAccountUrlsFromDb, updateConversationMeta, updateConversationOrders, getChatSettings, getConversation, getMessagesSince, updateConversation, updateMessageFeedback, upsertCustomerActivity, getCustomerActivity } from "../db.server";
 import AppConfig from "../services/config.server";
 import { createSseStream } from "../services/streaming.server";
 import { createOpenAIService } from "../services/openai.server";
@@ -25,6 +25,16 @@ export async function loader({ request }) {
   }
 
   const url = new URL(request.url);
+
+  // Handle message feedback
+  if (url.searchParams.has('feedback') && url.searchParams.has('message_id')) {
+    return handleFeedbackRequest(request, url);
+  }
+
+  // Handle customer activity updates
+  if (url.searchParams.has('activity') && url.searchParams.has('conversation_id')) {
+    return handleActivityRequest(request, url);
+  }
 
   // Handle storefront polling for merchant messages
   if (url.searchParams.has('poll') && url.searchParams.has('conversation_id')) {
@@ -94,6 +104,48 @@ async function handlePollRequest(request, url) {
     messages: merchantMessages,
     mode: conversation?.mode || 'ai',
   }), { headers: { ...getCorsHeaders(request), 'Content-Type': 'application/json' } });
+}
+
+/**
+ * Handle message feedback (thumbs up/down)
+ */
+async function handleFeedbackRequest(request, url) {
+  try {
+    const messageId = url.searchParams.get('message_id');
+    const feedback = url.searchParams.get('value'); // "good" | "bad"
+    if (!messageId || !['good', 'bad'].includes(feedback)) {
+      return new Response(JSON.stringify({ error: 'Invalid feedback' }), {
+        status: 400, headers: { ...getCorsHeaders(request), 'Content-Type': 'application/json' }
+      });
+    }
+    await updateMessageFeedback(messageId, feedback);
+    return new Response(JSON.stringify({ success: true }), {
+      headers: { ...getCorsHeaders(request), 'Content-Type': 'application/json' }
+    });
+  } catch (error) {
+    console.error('Error saving feedback:', error);
+    return new Response(JSON.stringify({ error: 'Failed to save feedback' }), {
+      status: 500, headers: { ...getCorsHeaders(request), 'Content-Type': 'application/json' }
+    });
+  }
+}
+
+/**
+ * Handle customer activity updates from storefront
+ */
+async function handleActivityRequest(request, url) {
+  try {
+    const conversationId = url.searchParams.get('conversation_id');
+    const data = {};
+    for (const key of ['currentPageUrl', 'currentPageTitle', 'viewingProduct', 'cartContents']) {
+      if (url.searchParams.has(key)) data[key] = url.searchParams.get(key);
+    }
+    await upsertCustomerActivity(conversationId, data);
+    return new Response(null, { status: 204, headers: getCorsHeaders(request) });
+  } catch (error) {
+    console.error('Error saving activity:', error);
+    return new Response(null, { status: 500, headers: getCorsHeaders(request) });
+  }
 }
 
 /**
@@ -209,10 +261,7 @@ async function handleChatSession({
       stream.sendMessage({ type: 'mode', mode: conversation.mode });
     }
 
-    // Handle "request human" — set pending_merchant mode
-    if (requestHuman && conversation) {
-      await updateConversation(conversationId, { mode: 'pending_merchant' });
-    }
+    // Handle "request human" — deferred to after Phase 1 to check support hours
 
     // If merchant is active, short-circuit — skip AI entirely
     if (conversation && conversation.mode === 'merchant') {
@@ -254,6 +303,29 @@ async function handleChatSession({
       console.log(`Connected to storefront MCP with ${storefrontMcpTools.length} tools`);
     } else {
       console.warn('Failed to connect to storefront MCP server:', storefrontResult.reason?.message);
+    }
+
+    // Handle "request human" — check support hours before setting pending_merchant
+    if (requestHuman && conversation) {
+      const supportSettings = chatSettingsResult?.status === 'fulfilled' ? chatSettingsResult.value : null;
+      if (supportSettings?.supportHoursStart && supportSettings?.supportHoursEnd) {
+        if (!isWithinSupportHours(supportSettings)) {
+          // Outside support hours — inject system context for AI to respond
+          conversationHistory = (dbMessagesResult.status === 'fulfilled' ? dbMessagesResult.value : []).map(dbMessage => {
+            let content;
+            try { content = JSON.parse(dbMessage.content); } catch { content = dbMessage.content; }
+            const role = dbMessage.role === 'merchant' ? 'assistant' : dbMessage.role;
+            return { role, content };
+          });
+          // Don't set pending_merchant mode; inform via SSE
+          stream.sendMessage({ type: 'support_unavailable', hours: `${supportSettings.supportHoursStart}-${supportSettings.supportHoursEnd}`, timezone: supportSettings.supportTimezone, days: supportSettings.supportDays });
+        } else {
+          await updateConversation(conversationId, { mode: 'pending_merchant' });
+        }
+      } else {
+        // No support hours configured — always allow
+        await updateConversation(conversationId, { mode: 'pending_merchant' });
+      }
     }
 
     // Detect page context and user intent early (needed for Phase 2 parallelization)
@@ -471,10 +543,15 @@ async function handleChatSession({
       return;
     }
 
-    // Extract merchant's custom instructions (if any)
-    const customInstructions = chatSettingsResult?.status === 'fulfilled'
-      ? chatSettingsResult.value?.customInstructions || ''
-      : '';
+    // Extract merchant's knowledge fields and combine into structured instructions
+    const chatSettings = chatSettingsResult?.status === 'fulfilled'
+      ? chatSettingsResult.value || {}
+      : {};
+    const knowledgeSections = [];
+    if (chatSettings.returnPolicy) knowledgeSections.push(`[RETURN POLICY]\n${chatSettings.returnPolicy}`);
+    if (chatSettings.contactInfo) knowledgeSections.push(`[CONTACT INFO]\n${chatSettings.contactInfo}`);
+    if (chatSettings.customInstructions) knowledgeSections.push(`[OTHER]\n${chatSettings.customInstructions}`);
+    const customInstructions = knowledgeSections.join('\n\n');
 
     // Execute the conversation stream
     let finalMessage = { role: 'user', content: userMessage };
@@ -528,6 +605,12 @@ async function handleChatSession({
             });
 
             saveMessage(conversationId, message.role, JSON.stringify(message.content))
+              .then((saved) => {
+                // Send message ID for feedback tracking
+                if (saved?.id && message.role === 'assistant') {
+                  stream.sendMessage({ type: 'message_id', message_id: saved.id });
+                }
+              })
               .catch((error) => {
                 console.error("Error saving message to database:", error);
               });
@@ -932,6 +1015,42 @@ function hasLikelyExactMatch(query = "", products = []) {
     const matched = queryTokens.filter((token) => title.includes(token)).length;
     return matched >= Math.min(2, queryTokens.length);
   });
+}
+
+/**
+ * Check if current time is within merchant's configured support hours
+ */
+function isWithinSupportHours(settings) {
+  if (!settings?.supportHoursStart || !settings?.supportHoursEnd) return true;
+
+  const tz = settings.supportTimezone || 'America/New_York';
+  const now = new Date();
+
+  // Get current time in merchant's timezone
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    weekday: 'short',
+  });
+  const parts = formatter.formatToParts(now);
+  const hour = parseInt(parts.find(p => p.type === 'hour')?.value || '0', 10);
+  const minute = parseInt(parts.find(p => p.type === 'minute')?.value || '0', 10);
+  const weekday = parts.find(p => p.type === 'weekday')?.value || '';
+
+  // Check day
+  const supportDays = (settings.supportDays || 'Mon,Tue,Wed,Thu,Fri').split(',');
+  if (!supportDays.includes(weekday)) return false;
+
+  // Check time range
+  const [startH, startM] = settings.supportHoursStart.split(':').map(Number);
+  const [endH, endM] = settings.supportHoursEnd.split(':').map(Number);
+  const currentMinutes = hour * 60 + minute;
+  const startMinutes = startH * 60 + startM;
+  const endMinutes = endH * 60 + endM;
+
+  return currentMinutes >= startMinutes && currentMinutes < endMinutes;
 }
 
 function withTimeout(promise, timeoutMs, timeoutMessage = "Operation timed out") {

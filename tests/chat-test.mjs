@@ -91,6 +91,30 @@ const TEST_CASES = [
     // Simulate Shopify app proxy: sends JSON body but with form-encoded Content-Type
     contentType: "application/x-www-form-urlencoded",
   },
+  {
+    name: "Return policy knowledge (merchant knowledge)",
+    message: "What is your return policy? How many days do I have?",
+    current_page_url: `${STORE_DOMAIN}/`,
+    judgePrompt: "The assistant should reference specific return policy details like the return window (e.g. 30 days), refund timeline, or conditions. A generic 'check with the store' is NOT acceptable — the merchant has configured return policy knowledge. Does the response include specific policy details?",
+    expectToolCall: false,
+    maxChars: 600,
+  },
+  {
+    name: "Contact information knowledge",
+    message: "How can I contact support? What are your hours?",
+    current_page_url: `${STORE_DOMAIN}/`,
+    judgePrompt: "The assistant should provide specific contact details like email, phone, or hours. A generic response without specific contact info is NOT acceptable — the merchant has configured contact information. Does the response include specific contact details?",
+    expectToolCall: false,
+    maxChars: 600,
+  },
+  {
+    name: "Order tracking request",
+    message: "Where is my order? I want to track my package.",
+    current_page_url: `${STORE_DOMAIN}/`,
+    judgePrompt: "The assistant should ask for the customer's order number to look up the order status, OR attempt to use an order tracking tool. It should NOT just say 'check your email' — it should actively offer to help track the order. Does the response ask for an order number or attempt to look up order status?",
+    expectToolCall: false,
+    maxChars: 400,
+  },
 ];
 
 // ── SSE parser ──────────────────────────────────────────────────────
@@ -123,6 +147,7 @@ async function sendChatMessage(testCase) {
   let toolCalls = [];
   let events = [];
   let error = null;
+  let messageIds = [];
 
   try {
     const controller = new AbortController();
@@ -184,6 +209,10 @@ async function sendChatMessage(testCase) {
           toolCalls.push(data.tool_use_message || data);
         }
 
+        if (data.type === "message_id" && data.message_id) {
+          messageIds.push(data.message_id);
+        }
+
         if (data.type === "error") {
           error = data.error || "Unknown error";
         }
@@ -209,6 +238,7 @@ async function sendChatMessage(testCase) {
     toolCalls,
     events,
     error,
+    messageIds,
   };
 }
 
@@ -343,10 +373,28 @@ async function main() {
       toolCallCount: result.toolCalls.length,
       judgePass: judgeResult.pass,
       judgeReason: judgeResult.reason,
+      messageIds: result.messageIds,
     });
 
     console.log();
   }
+
+  // ── Feedback E2E test ──────────────────────────────────────────
+  console.log("--- Feedback E2E Test ---");
+  const firstMessageId = results.flatMap(r => r.messageIds || []).find(Boolean);
+  if (firstMessageId) {
+    try {
+      const fbUrl = `${BASE_URL}/chat?feedback=true&message_id=${encodeURIComponent(firstMessageId)}&value=good`;
+      const fbRes = await fetch(fbUrl, { method: "GET", headers: { Origin: STORE_DOMAIN } });
+      const fbBody = await fbRes.json();
+      console.log(`  Feedback submit (message ${firstMessageId}): ${fbRes.ok && fbBody.success ? "PASS" : "FAIL"}`);
+    } catch (err) {
+      console.log(`  Feedback submit: FAIL (${err.message})`);
+    }
+  } else {
+    console.log("  Feedback submit: SKIP (no message_id received)");
+  }
+  console.log();
 
   // ── Summary ─────────────────────────────────────────────────────
   console.log("=".repeat(70));

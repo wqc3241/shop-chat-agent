@@ -544,6 +544,45 @@ export async function updateConversationMeta(conversationId, data) {
 }
 
 /**
+ * Update feedback on a message
+ * @param {string} messageId - The message ID
+ * @param {string} feedback - "good" | "bad"
+ */
+export async function updateMessageFeedback(messageId, feedback) {
+  return prisma.message.update({
+    where: { id: messageId },
+    data: { feedback },
+  });
+}
+
+/**
+ * Upsert customer activity for a conversation
+ * @param {string} conversationId - The conversation ID
+ * @param {Object} data - Activity data
+ */
+export async function upsertCustomerActivity(conversationId, data) {
+  return prisma.customerActivity.upsert({
+    where: { conversationId },
+    update: { ...data, updatedAt: new Date() },
+    create: {
+      conversationId,
+      ...data,
+      updatedAt: new Date(),
+    },
+  });
+}
+
+/**
+ * Get customer activity for a conversation
+ * @param {string} conversationId - The conversation ID
+ */
+export async function getCustomerActivity(conversationId) {
+  return prisma.customerActivity.findUnique({
+    where: { conversationId },
+  });
+}
+
+/**
  * Get dashboard metrics for a shop
  * @param {string} shop - The shop domain
  * @returns {Promise<Object>} Metrics object
