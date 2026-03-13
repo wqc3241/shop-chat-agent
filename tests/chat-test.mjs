@@ -54,9 +54,9 @@ const TEST_CASES = [
   },
   {
     name: "Product search",
-    message: "Show me brake pads",
+    message: "Show me coilovers",
     current_page_url: `${STORE_DOMAIN}/`,
-    judgePrompt: "The assistant should either show product results or mention searching the catalog. Does it attempt to help find brake pads? Is the text portion concise (not repeating product details already shown in cards)?",
+    judgePrompt: "The assistant should show product results with names and prices, or mention searching the catalog. Does it present relevant coilover/suspension products? Is the text portion concise (not repeating product details already shown in cards)?",
     expectToolCall: true,
   },
   {
@@ -213,7 +213,7 @@ async function sendChatMessage(testCase) {
 }
 
 // ── LLM Judge ───────────────────────────────────────────────────────
-async function judgeResponse(testCase, responseText) {
+async function judgeResponse(testCase, responseText, productCards = []) {
   if (!process.env.OPENAI_API_KEY) {
     return { pass: null, reason: "No OPENAI_API_KEY set, skipping judge" };
   }
@@ -222,6 +222,15 @@ async function judgeResponse(testCase, responseText) {
     const { default: OpenAI } = await import("openai");
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+    // Include product card info if present so the judge can evaluate the full response
+    let productContext = "";
+    if (productCards.length > 0) {
+      const cardSummary = productCards.slice(0, 5).map(p =>
+        `- ${p.title} — ${p.price}${p.url ? ` (${p.url})` : ''}`
+      ).join("\n");
+      productContext = `\n\nProduct cards shown to user (${productCards.length} total):\n${cardSummary}`;
+    }
+
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       max_tokens: 200,
@@ -229,7 +238,7 @@ async function judgeResponse(testCase, responseText) {
         {
           role: "system",
           content:
-            'You are a QA judge evaluating a chatbot response. Respond with JSON: {"pass": true/false, "reason": "brief explanation"}. Be lenient — the bot may not have real store data. Focus on whether the response is reasonable and relevant.',
+            'You are a QA judge evaluating a chatbot response. Respond with JSON: {"pass": true/false, "reason": "brief explanation"}. Be lenient — the bot may not have real store data. Focus on whether the response is reasonable and relevant. Product cards are displayed visually alongside the text response — count them as part of the answer.',
         },
         {
           role: "user",
@@ -240,7 +249,7 @@ Page URL: ${testCase.current_page_url}
 Evaluation criteria: ${testCase.judgePrompt}
 
 Bot response:
-${responseText || "(empty response)"}`,
+${responseText || "(empty response)"}${productContext}`,
         },
       ],
     });
@@ -313,7 +322,11 @@ async function main() {
     let judgeResult = { pass: null, reason: "Judge disabled" };
     if (USE_JUDGE) {
       process.stdout.write("  Judging quality... ");
-      judgeResult = await judgeResponse(tc, result.fullResponseText);
+      // Extract product cards from SSE events for the judge
+      const productCards = result.events
+        .filter(e => e.type === "product_results" && e.products)
+        .flatMap(e => e.products);
+      judgeResult = await judgeResponse(tc, result.fullResponseText, productCards);
       console.log(`${statusIcon(judgeResult.pass)} - ${judgeResult.reason}`);
     }
 
