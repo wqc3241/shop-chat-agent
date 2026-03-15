@@ -1223,10 +1223,7 @@
               ShopAIChat.ModeIndicator.update(data.mode);
             }
 
-            // If mode changed back to AI, stop polling
-            if (data.mode === 'ai') {
-              this.stop();
-            }
+            // Keep polling even in AI mode so we can detect merchant takeovers
           } catch (e) {
             console.warn('Polling error:', e);
           }
@@ -1556,14 +1553,13 @@
         // Start activity tracking immediately for existing conversations
         this.Activity.start();
 
-        // Restore mode from sessionStorage and resume polling if needed
+        // Restore mode indicator and always start polling so storefront
+        // can discover merchant takeovers and receive merchant messages
         const savedMode = localStorage.getItem('shopAiChatMode');
         if (savedMode && savedMode !== 'ai') {
           this.ModeIndicator.update(savedMode);
-          if (savedMode === 'merchant' || savedMode === 'pending_merchant') {
-            this.Polling.start(conversationId, this.UI.elements.messagesContainer);
-          }
         }
+        this.Polling.start(conversationId, this.UI.elements.messagesContainer);
       } else {
         // No previous conversation, show welcome message
         const welcomeMessage = window.shopChatConfig?.welcomeMessage || "👋 Hi there! How can I help you today?";
