@@ -489,23 +489,18 @@ async function handleChatSession({
     }
 
     // Handle "request human" — check support hours before setting pending_merchant
+    let supportUnavailableData = null;
     if (requestHuman && conversation) {
       const supportSettings = chatSettingsResult?.status === 'fulfilled' ? chatSettingsResult.value : null;
       if (supportSettings?.supportSchedule) {
         const hourCheck = isWithinSupportHours(supportSettings);
         if (!hourCheck.available) {
-          // Outside support hours — inject system context for AI to respond
-          conversationHistory = (dbMessagesResult.status === 'fulfilled' ? dbMessagesResult.value : []).map(dbMessage => {
-            let content;
-            try { content = JSON.parse(dbMessage.content); } catch { content = dbMessage.content; }
-            const role = dbMessage.role === 'merchant' ? 'assistant' : dbMessage.role;
-            return { role, content };
-          });
-          // Don't set pending_merchant mode; inform via SSE
+          // Outside support hours — don't set pending_merchant mode; inform via SSE
           const sseData = { type: 'support_unavailable' };
           if (hourCheck.displayText) sseData.displayText = hourCheck.displayText;
           if (hourCheck.reason) sseData.reason = hourCheck.reason;
           stream.sendMessage(sseData);
+          supportUnavailableData = sseData;
         } else {
           await updateConversation(conversationId, { mode: 'pending_merchant' });
         }
@@ -598,9 +593,18 @@ async function handleChatSession({
 
     // If customer requested a human, inject context for the AI to acknowledge
     if (requestHuman) {
+      let systemNote = '[SYSTEM] The customer has requested to speak with a human team member.';
+      if (supportUnavailableData) {
+        systemNote += ' However, human support is currently UNAVAILABLE.';
+        if (supportUnavailableData.reason) systemNote += ` Reason: ${supportUnavailableData.reason}.`;
+        if (supportUnavailableData.displayText) systemNote += ` Support hours: ${supportUnavailableData.displayText}.`;
+        systemNote += ' Apologize that human support is not available right now, mention the support hours, and continue assisting them.';
+      } else {
+        systemNote += ' Acknowledge this in your response and let them know a team member has been notified and will join shortly. Continue assisting them in the meantime.';
+      }
       conversationHistory.push({
         role: 'user',
-        content: [{ type: 'text', text: '[SYSTEM] The customer has requested to speak with a human team member. Acknowledge this in your response and let them know a team member has been notified and will join shortly. Continue assisting them in the meantime.' }]
+        content: [{ type: 'text', text: systemNote }]
       });
     }
 
