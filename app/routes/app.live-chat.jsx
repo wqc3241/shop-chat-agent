@@ -762,7 +762,7 @@ export default function LiveChat() {
 
               {/* Customer Activity */}
               {customerActivity && (
-                <div style={{ borderTop: "1px solid #e5e7eb", paddingTop: "14px", overflowY: "auto", flex: 1, minHeight: 0 }}>
+                <div style={{ borderTop: "1px solid #e5e7eb", paddingTop: "14px" }}>
                   <div style={{ fontSize: "15px", fontWeight: 700, color: "#0f172a", marginBottom: "10px" }}>Live Activity</div>
 
                   {/* Current Page */}
