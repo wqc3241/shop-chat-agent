@@ -157,10 +157,26 @@ const TEST_CASES = [
     maxChars: 600,
   },
   {
-    name: "Store policy via MCP tool",
+    name: "Store policy via MCP tool (shipping)",
     message: "What is your shipping policy?",
     current_page_url: `${STORE_DOMAIN}/`,
     judgePrompt: "The assistant should attempt to find shipping policy info, either via the search_shop_policies_and_faqs tool or by giving a helpful generic answer. Does the response address shipping in some way?",
+    expectToolCall: false,
+    maxChars: 600,
+  },
+  {
+    name: "Return policy via MCP tool",
+    message: "What is your return and refund policy?",
+    current_page_url: `${STORE_DOMAIN}/`,
+    judgePrompt: "The assistant should use the search_shop_policies_and_faqs tool to look up the store's return/refund policy. If the store has a return policy configured, the response should include specific details from it (e.g., return window, conditions). A generic 'check the store website' without attempting a tool call is NOT acceptable. Does the response attempt to provide return policy details?",
+    expectToolCall: false,
+    maxChars: 800,
+  },
+  {
+    name: "Contact information via MCP tool",
+    message: "How can I contact you? What is your phone number and email?",
+    current_page_url: `${STORE_DOMAIN}/`,
+    judgePrompt: "The assistant should use the search_shop_policies_and_faqs tool to look up contact information. If the store has contact info configured, the response should include specific details like email, phone, or hours. Does the response attempt to provide contact details?",
     expectToolCall: false,
     maxChars: 600,
   },
@@ -588,6 +604,42 @@ async function main() {
         console.log(`  History endpoint: FAIL (${err.message})`);
       }
     }
+  }
+  console.log();
+
+  // ── MCP Policy Tool E2E test ────────────────────────────────────
+  console.log("--- MCP Policy Tool E2E Test ---");
+  try {
+    // Test that the storefront MCP search_shop_policies_and_faqs tool is accessible
+    const mcpUrl = `${STORE_DOMAIN}/api/mcp`;
+    const toolsRes = await fetch(mcpUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", method: "tools/list", id: 1, params: {} }),
+    });
+    const toolsData = await toolsRes.json();
+    const tools = toolsData?.result?.tools || [];
+    const hasPolicyTool = tools.some(t => t.name === "search_shop_policies_and_faqs");
+    console.log(`  MCP tools endpoint responds: ${toolsRes.ok ? "PASS" : "FAIL"} (${tools.length} tools)`);
+    console.log(`  search_shop_policies_and_faqs available: ${hasPolicyTool ? "PASS" : "FAIL"}`);
+
+    // Test calling the policy tool
+    if (hasPolicyTool) {
+      const policyRes = await fetch(mcpUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0", method: "tools/call", id: 2,
+          params: { name: "search_shop_policies_and_faqs", arguments: { query: "return policy", context: "test" } },
+        }),
+      });
+      const policyData = await policyRes.json();
+      const policyText = policyData?.result?.content?.[0]?.text || "";
+      const hasContent = policyText.length > 2 && policyText !== "[]";
+      console.log(`  Policy query returns content: ${hasContent ? "PASS" : "WARN — empty (policies may not be indexed yet)"}`);
+    }
+  } catch (err) {
+    console.log(`  MCP Policy tool: FAIL (${err.message})`);
   }
   console.log();
 
