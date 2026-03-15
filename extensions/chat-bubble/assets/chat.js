@@ -735,38 +735,43 @@
 
           case 'chunk':
             streamState.sawAssistantText = true;
-            ShopAIChat.UI.removeTypingIndicator();
-            // Create message element on first chunk if it doesn't exist
+            // Show typing indicator while accumulating (don't show raw text)
+            ShopAIChat.UI.showTypingIndicator();
+            // Create hidden message element on first chunk
             if (!currentMessageElement) {
               currentMessageElement = document.createElement('div');
               currentMessageElement.classList.add('shop-ai-message', 'assistant');
-              currentMessageElement.textContent = '';
+              currentMessageElement.style.display = 'none';
               currentMessageElement.dataset.rawText = '';
-              // Add timestamp
-              var tsEl = document.createElement('div');
-              tsEl.className = 'shop-ai-message-time';
-              tsEl.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-              currentMessageElement.appendChild(tsEl);
               messagesContainer.appendChild(currentMessageElement);
               updateCurrentElement(currentMessageElement);
             }
+            // Accumulate text silently
             currentMessageElement.dataset.rawText += data.chunk;
-            currentMessageElement.textContent = currentMessageElement.dataset.rawText;
-            ShopAIChat.UI.scrollToBottom();
             break;
 
           case 'message_id':
             // Associate the message ID with the current assistant element for feedback
             if (currentMessageElement && data.message_id) {
               currentMessageElement.dataset.messageId = data.message_id;
-              ShopAIChat.Feedback.addButtons(currentMessageElement);
             }
             break;
 
           case 'message_complete':
             ShopAIChat.UI.removeTypingIndicator();
             if (currentMessageElement && currentMessageElement.dataset.rawText && currentMessageElement.dataset.rawText.trim() !== '') {
+              // Reveal the complete message
+              currentMessageElement.style.display = '';
+              // Add timestamp
+              var tsEl = document.createElement('div');
+              tsEl.className = 'shop-ai-message-time';
+              tsEl.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+              currentMessageElement.appendChild(tsEl);
+              // Format markdown and add feedback buttons
               ShopAIChat.Formatting.formatMessageContent(currentMessageElement);
+              if (currentMessageElement.dataset.messageId) {
+                ShopAIChat.Feedback.addButtons(currentMessageElement);
+              }
               ShopAIChat.UI.scrollToBottom();
             }
             break;
