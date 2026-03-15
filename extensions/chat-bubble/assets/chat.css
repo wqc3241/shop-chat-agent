@@ -134,23 +134,102 @@
   }
 
   .shop-ai-chat-header {
-    padding: 16px;
-    background-color: #5046e4;
-    color: white;
-    font-weight: 600;
     display: flex;
-    justify-content: space-between;
     align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 16px;
+    background: var(--bubble-color, #5046e4);
+    color: #fff;
+  }
+
+  .shop-ai-chat-header .shop-ai-chat-title {
+    font-size: 15px;
+    line-height: 1.2;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .shop-ai-chat-close {
-    background: none;
-    border: none;
-    color: white;
+    margin-left: auto;
+    width: 32px;
+    height: 32px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: #fff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     cursor: pointer;
-    font-size: 20px;
-    padding: 0;
-    line-height: 1;
+    transition: background-color 0.15s ease;
+  }
+
+  .shop-ai-chat-close svg {
+    width: 18px;
+    height: 18px;
+    display: block;
+  }
+
+  .shop-ai-chat-close:hover {
+    background: rgba(255, 255, 255, 0.15);
+  }
+
+  .shop-ai-chat-close:active {
+    background: rgba(255, 255, 255, 0.25);
+  }
+
+  /* Status sub-bar (below header) */
+  .shop-ai-chat-status-bar {
+    display: none;
+  }
+
+  .shop-ai-chat-status-bar.pending,
+  .shop-ai-chat-status-bar.merchant-active {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.2;
+  }
+
+  .shop-ai-chat-status-bar::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .shop-ai-chat-status-bar.pending {
+    background: #fffbeb;
+    color: #b45309;
+    border-bottom: 1px solid #fde68a;
+  }
+
+  .shop-ai-chat-status-bar.pending::before {
+    background: #f59e0b;
+    animation: status-pulse 1.4s ease-in-out infinite;
+  }
+
+  .shop-ai-chat-status-bar.merchant-active {
+    background: #ecfdf5;
+    color: #166534;
+    border-bottom: 1px solid #a7f3d0;
+  }
+
+  .shop-ai-chat-status-bar.merchant-active::before {
+    background: #22c55e;
+  }
+
+  @keyframes status-pulse {
+    0%, 100% { opacity: 0.5; transform: scale(0.85); }
+    50% { opacity: 1; transform: scale(1.1); }
   }
 
   .shop-ai-chat-messages {
@@ -660,23 +739,7 @@
     color: rgba(255, 255, 255, 0.7);
   }
 
-  /* Mode indicator bar */
-  .shop-ai-chat-status {
-    font-size: 11px;
-    padding: 4px 10px;
-    text-align: center;
-    font-weight: 500;
-  }
-
-  .shop-ai-chat-status.merchant-active {
-    background-color: rgba(255, 255, 255, 0.2);
-    color: #fff;
-  }
-
-  .shop-ai-chat-status.pending {
-    background-color: rgba(255, 200, 0, 0.3);
-    color: #fff;
-  }
+  /* Legacy .shop-ai-chat-status (replaced by .shop-ai-chat-status-bar) */
 
   /* Feedback buttons */
   .shop-ai-feedback {

@@ -1297,28 +1297,24 @@
        * @param {string} mode - 'ai', 'merchant', or 'pending_merchant'
        */
       update: function(mode) {
-        const header = document.querySelector('.shop-ai-chat-header');
-        if (!header) return;
+        const statusBar = document.querySelector('.shop-ai-chat-status-bar');
+        if (!statusBar) return;
 
-        // Remove existing indicator
-        const existing = header.querySelector('.shop-ai-chat-status');
-        if (existing) existing.remove();
+        // Reset classes and content
+        statusBar.className = 'shop-ai-chat-status-bar';
+        statusBar.textContent = '';
 
         if (mode === 'ai') return; // No indicator for AI mode
 
-        const indicator = document.createElement('div');
-        indicator.className = 'shop-ai-chat-status';
-
         if (mode === 'merchant') {
-          indicator.textContent = 'Chatting with Support';
-          indicator.classList.add('merchant-active');
+          statusBar.textContent = 'Chatting with Support';
+          statusBar.classList.add('merchant-active');
         } else if (mode === 'pending_merchant') {
-          indicator.textContent = 'Waiting for agent...';
-          indicator.classList.add('pending');
+          statusBar.textContent = 'Waiting for agent...';
+          statusBar.classList.add('pending');
         }
 
-        header.appendChild(indicator);
-        this.element = indicator;
+        this.element = statusBar;
       },
     },
 
