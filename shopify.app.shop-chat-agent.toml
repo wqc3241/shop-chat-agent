@@ -1,0 +1,36 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "4c027b857aefc723b419e183d880dbef"
+name = "shop-chat-agent"
+application_url = "https://nlp-shop-chat-agent.fly.dev"
+embedded = true
+
+[webhooks]
+api_version = "2026-04"
+
+  [[webhooks.subscriptions]]
+  compliance_topics = ["customers/data_request", "customers/redact", "shop/redact"]
+  uri = "/webhooks"
+
+[access_scopes]
+scopes = "customer_read_customers,customer_read_orders,customer_read_store_credit_account_transactions,customer_read_store_credit_accounts,unauthenticated_read_product_listings,read_products,read_legal_policies"
+
+[auth]
+redirect_urls = [ "https://nlp-shop-chat-agent.fly.dev/api/auth" ]
+
+[pos]
+embedded = false
+
+[build]
+automatically_update_urls_on_dev = true
+
+[app_proxy]
+url = "https://nlp-shop-chat-agent.fly.dev"
+subpath = "chat-agent"
+prefix = "apps"
+automatically_update_urls_on_dev = true
+
+[customer_authentication]
+redirect_uris = [
+  "https://nlp-shop-chat-agent.fly.dev/callback"
+]
