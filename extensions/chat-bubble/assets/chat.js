@@ -1013,35 +1013,53 @@
      * Customer activity tracker — sends page/cart/product context to backend
      */
     Activity: {
-      timer: null,
       lastPayload: '',
+      lastCartData: '',
+      intercepted: false,
 
       start: function() {
-        this.stop();
-        this.send(); // immediate first send
-        this.timer = setInterval(function() { ShopAIChat.Activity.send(); }, 5000);
+        // Send page activity immediately (current page, product info)
+        this.sendPageActivity();
+        // Fetch cart once on start
+        this.fetchAndSendCart();
+        // Intercept cart mutations (only once)
+        if (!this.intercepted) {
+          this.interceptCartMutations();
+          this.intercepted = true;
+        }
       },
 
       stop: function() {
-        if (this.timer) { clearInterval(this.timer); this.timer = null; }
+        // No timers to clear — event-driven
       },
 
-      send: function() {
+      /**
+       * Send page context (URL, title, viewed product) — called on page load
+       */
+      sendPageActivity: function() {
         var convId = localStorage.getItem('shopAiConversationId');
         if (!convId) return;
-
         var payload = {
           currentPageUrl: window.location.href,
           currentPageTitle: document.title,
           viewingProduct: this.getProductInfo(),
-          cartContents: '', // filled async below
+          cartContents: this.lastCartData,
         };
+        this._sendToServer(convId, payload);
+      },
 
-        // Fetch cart asynchronously
+      /**
+       * Fetch cart and send update — called on cart mutations
+       */
+      fetchAndSendCart: function() {
+        var self = this;
+        var convId = localStorage.getItem('shopAiConversationId');
+        if (!convId) return;
+
         fetch('/cart.js', { method: 'GET', headers: { 'Accept': 'application/json' } })
           .then(function(res) { return res.json(); })
           .then(function(cart) {
-            payload.cartContents = JSON.stringify((cart.items || []).slice(0, 10).map(function(item) {
+            self.lastCartData = JSON.stringify((cart.items || []).slice(0, 10).map(function(item) {
               return {
                 title: item.title,
                 quantity: item.quantity,
@@ -1049,12 +1067,58 @@
                 variantTitle: item.variant_title,
               };
             }));
-            ShopAIChat.Activity._sendToServer(convId, payload);
+            var payload = {
+              currentPageUrl: window.location.href,
+              currentPageTitle: document.title,
+              viewingProduct: self.getProductInfo(),
+              cartContents: self.lastCartData,
+            };
+            self._sendToServer(convId, payload);
           })
-          .catch(function() {
-            // Cart fetch failed (possibly not a Shopify storefront); send without cart
-            ShopAIChat.Activity._sendToServer(convId, payload);
-          });
+          .catch(function() { /* cart fetch failed */ });
+      },
+
+      /**
+       * Monkey-patch fetch and XMLHttpRequest to detect cart mutations.
+       * When /cart/add.js, /cart/change.js, /cart/update.js, or /cart/clear.js
+       * is called, we fetch the updated cart and send to backend.
+       */
+      interceptCartMutations: function() {
+        var self = this;
+        var cartMutationPattern = /\/cart\/(add|change|update|clear)(\.js)?(\?|$)/;
+
+        // Patch fetch
+        var originalFetch = window.fetch;
+        window.fetch = function() {
+          var url = arguments[0];
+          var urlStr = typeof url === 'string' ? url : (url && url.url ? url.url : '');
+          var result = originalFetch.apply(this, arguments);
+
+          if (cartMutationPattern.test(urlStr)) {
+            result.then(function() {
+              // Small delay to let Shopify update the cart state
+              setTimeout(function() { self.fetchAndSendCart(); }, 500);
+            }).catch(function() {});
+          }
+          return result;
+        };
+
+        // Patch XMLHttpRequest for themes using XHR
+        var originalXHROpen = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function(method, url) {
+          this._shopChatUrl = url;
+          return originalXHROpen.apply(this, arguments);
+        };
+        var originalXHRSend = XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.send = function() {
+          var xhr = this;
+          if (cartMutationPattern.test(xhr._shopChatUrl || '')) {
+            xhr.addEventListener('load', function() {
+              setTimeout(function() { self.fetchAndSendCart(); }, 500);
+            });
+          }
+          return originalXHRSend.apply(this, arguments);
+        };
       },
 
       _sendToServer: function(convId, payload) {
@@ -1062,8 +1126,6 @@
         if (serialized === this.lastPayload) return; // no change
         this.lastPayload = serialized;
 
-        // Use GET with query params (Shopify proxy reliably passes these)
-        // Truncate long fields to stay within URL length limits
         var params = new URLSearchParams({
           activity: 'true',
           conversation_id: convId,
@@ -1077,7 +1139,6 @@
       },
 
       getProductInfo: function() {
-        // Try to detect product info from structured data or meta tags
         var productData = {};
         try {
           var ldJson = document.querySelector('script[type="application/ld+json"]');
@@ -1095,7 +1156,6 @@
           }
         } catch (e) { /* ignore parse errors */ }
 
-        // Fallback: check meta tags
         if (!productData.title) {
           var ogTitle = document.querySelector('meta[property="og:title"]');
           if (ogTitle) productData.title = ogTitle.content || '';
