@@ -620,6 +620,9 @@
       streamResponse: async function(userMessage, conversationId, messagesContainer) {
         let currentMessageElement = null;
 
+        // Stop polling during stream to prevent duplicate messages
+        ShopAIChat.Polling.stop();
+
         try {
           const promptType = window.shopChatConfig?.promptType || "standardAssistant";
           const currentMode = localStorage.getItem('shopAiChatMode') || 'ai';
