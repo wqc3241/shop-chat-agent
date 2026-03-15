@@ -1,12 +1,23 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useLoaderData, useSearchParams } from "react-router";
 import { authenticate } from "../shopify.server";
+import prisma from "../db.server";
 import { getActiveConversations } from "../db.server";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const conversations = await getActiveConversations(session.shop);
-  return { conversations, shop: session.shop };
+
+  // Enrich with lastActivityAt for online/offline status
+  const convIds = conversations.map(c => c.id);
+  const activities = convIds.length > 0 ? await prisma.customerActivity.findMany({
+    where: { conversationId: { in: convIds } },
+    select: { conversationId: true, updatedAt: true },
+  }) : [];
+  const activityMap = Object.fromEntries(activities.map(a => [a.conversationId, a.updatedAt]));
+  const enriched = conversations.map(c => ({ ...c, lastActivityAt: activityMap[c.id] || null }));
+
+  return { conversations: enriched, shop: session.shop };
 };
 
 function timeAgo(dateString) {
@@ -452,7 +463,15 @@ export default function LiveChat() {
                     }}
                   >
                     <div style={{ display: "grid", gridTemplateColumns: "auto 1fr auto", gap: "12px", alignItems: "start" }}>
-                      {renderIconBubble(getInitials(conversation))}
+                      <div style={{ position: "relative" }}>
+                        {renderIconBubble(getInitials(conversation))}
+                        <div style={{
+                          position: "absolute", bottom: 0, right: 0,
+                          width: "10px", height: "10px", borderRadius: "50%",
+                          backgroundColor: conversation.lastActivityAt && (Date.now() - new Date(conversation.lastActivityAt).getTime()) < 30000 ? "#22c55e" : "#94a3b8",
+                          border: "2px solid #ffffff",
+                        }} />
+                      </div>
                       <div style={{ minWidth: 0 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                           <span style={{ fontSize: "16px", fontWeight: 600, color: "#0f172a" }}>{getDisplayName(conversation)}</span>
