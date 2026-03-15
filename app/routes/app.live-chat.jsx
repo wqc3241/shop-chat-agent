@@ -148,7 +148,7 @@ function renderIconBubble(children, tone = "#8b5cf6") {
 }
 
 export default function LiveChat() {
-  const { conversations: initialConversations } = useLoaderData();
+  const { conversations: initialConversations, shop } = useLoaderData();
   const [searchParams] = useSearchParams();
   const [conversations, setConversations] = useState(initialConversations);
   const [selectedId, setSelectedId] = useState(searchParams.get("conversation") || initialConversations[0]?.id || null);
@@ -625,7 +625,7 @@ export default function LiveChat() {
 
         <aside style={{ borderLeft: "1px solid #e5e7eb", backgroundColor: "#ffffff", padding: "14px 14px 16px", overflow: "hidden" }}>
           {selectedConv ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: "18px", height: "100%", overflow: "hidden" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: "18px", height: "100%", overflowY: "auto" }}>
               <div>
                 <div style={{ fontSize: "15px", fontWeight: 700, color: "#0f172a" }}>Customer Details</div>
                 <div style={{ display: "flex", alignItems: "center", gap: "12px", marginTop: "16px" }}>
@@ -645,30 +645,50 @@ export default function LiveChat() {
 
               <div style={{ borderTop: "1px solid #e5e7eb", paddingTop: "14px" }}>
                 <div style={{ fontSize: "15px", fontWeight: 700, color: "#0f172a", marginBottom: "14px" }}>Order Context</div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "8px", fontSize: "14px", color: "#475569" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "8px", fontSize: "14px", color: "#475569", alignItems: "center" }}>
                   <span>Order Number</span>
-                  <strong style={{ color: "#0f172a" }}>{orderList[0] || "None"}</strong>
+                  {orderList[0] ? (
+                    <a
+                      href={`https://${shop}/admin/orders?query=${encodeURIComponent(orderList[0].replace('#', ''))}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ color: "#2563eb", fontWeight: 600, textDecoration: "none" }}
+                    >
+                      {orderList[0]}
+                    </a>
+                  ) : (
+                    <strong style={{ color: "#94a3b8" }}>None</strong>
+                  )}
                   <span>Source page</span>
-                  <strong style={{ color: "#0f172a", maxWidth: "110px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {selectedConv.pageUrl || "Unknown"}
-                  </strong>
+                  {selectedConv.pageUrl ? (
+                    <a
+                      href={selectedConv.pageUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={selectedConv.pageUrl}
+                      style={{ color: "#2563eb", fontWeight: 600, textDecoration: "none", maxWidth: "140px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}
+                    >
+                      {selectedConv.pageUrl.replace(/^https?:\/\/[^/]+/, '') || '/'}
+                    </a>
+                  ) : (
+                    <strong style={{ color: "#94a3b8" }}>Unknown</strong>
+                  )}
                 </div>
-                <button
-                  type="button"
-                  disabled={!selectedConv.orderNumbers}
-                  style={{
-                    width: "100%",
-                    marginTop: "14px",
-                    borderRadius: "10px",
-                    border: "1px solid #d1d5db",
-                    backgroundColor: "#ffffff",
-                    color: selectedConv.orderNumbers ? "#334155" : "#94a3b8",
-                    padding: "10px 12px",
-                    fontSize: "14px",
-                  }}
-                >
-                  View Full Order
-                </button>
+                {orderList.length > 1 && (
+                  <div style={{ marginTop: "8px", fontSize: "13px", color: "#64748b" }}>
+                    {orderList.slice(1).map((order, i) => (
+                      <a
+                        key={i}
+                        href={`https://${shop}/admin/orders?query=${encodeURIComponent(order.replace('#', ''))}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ color: "#2563eb", textDecoration: "none", marginRight: "8px" }}
+                      >
+                        {order}
+                      </a>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div style={{ borderTop: "1px solid #e5e7eb", paddingTop: "14px" }}>
