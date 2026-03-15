@@ -462,8 +462,8 @@ export default function LiveChat() {
                           <span style={{ color: status.dot }}>o</span>
                           <span>{status.label}</span>
                         </div>
-                        <div style={{ marginTop: "8px", color: "#475569", fontSize: "14px", lineHeight: 1.35 }}>
-                          {preview.length > 54 ? `${preview.slice(0, 54)}...` : preview}
+                        <div style={{ marginTop: "8px", color: "#475569", fontSize: "14px", lineHeight: 1.35, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {preview}
                         </div>
                       </div>
                       <div style={{ color: "#94a3b8", fontSize: "13px", whiteSpace: "nowrap", paddingTop: "4px" }}>
