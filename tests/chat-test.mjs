@@ -40,7 +40,7 @@ const TARGET_TTFT_MS = parseInt(param("target", "2000"), 10);
 const MAX_RESPONSE_CHARS = parseInt(param("max-chars", "800"), 10);
 
 // ── Store config ────────────────────────────────────────────────────
-const STORE_DOMAIN = "https://dev-nlp-brochure.myshopify.com";
+const STORE_DOMAIN = param("store-domain", "https://dev-nlp-brochure-2.myshopify.com");
 
 // ── Test scenarios ──────────────────────────────────────────────────
 const TEST_CASES = [
@@ -114,6 +114,55 @@ const TEST_CASES = [
     judgePrompt: "The assistant should ask for the customer's order number to look up the order status, OR attempt to use an order tracking tool. It should NOT just say 'check your email' — it should actively offer to help track the order. Does the response ask for an order number or attempt to look up order status?",
     expectToolCall: false,
     maxChars: 400,
+  },
+  // ── New: Conversational shopping assistant tests ──────────────────
+  {
+    name: "Vague product request (should ask clarifying questions)",
+    message: "I want to buy a snowboard",
+    current_page_url: `${STORE_DOMAIN}/`,
+    judgePrompt: "The assistant should NOT immediately list products. Instead, it should ask clarifying questions like skill level, budget, riding style, or preferences. A response that dumps product results without asking questions first is a FAIL. Does the assistant ask at least one clarifying question before recommending products?",
+    expectToolCall: false,
+    maxChars: 600,
+  },
+  {
+    name: "Specific product request (should search immediately)",
+    message: "Show me snowboards under $700",
+    current_page_url: `${STORE_DOMAIN}/`,
+    judgePrompt: "The customer gave specific criteria (snowboards + price limit). The assistant should search and present relevant products, NOT ask more questions. Does the response include product recommendations or mention searching the catalog?",
+    expectToolCall: true,
+    maxChars: 1000,
+  },
+  {
+    name: "Catalog browsing request (should search immediately)",
+    message: "What snowboards do you carry?",
+    current_page_url: `${STORE_DOMAIN}/`,
+    judgePrompt: "The customer wants to browse the catalog. The assistant should search and show available snowboards, NOT ask clarifying questions first. Does the response present products from the catalog?",
+    expectToolCall: true,
+    maxChars: 1000,
+  },
+  {
+    name: "Gift request (should ask clarifying questions)",
+    message: "I need a gift for my friend who loves winter sports",
+    current_page_url: `${STORE_DOMAIN}/`,
+    judgePrompt: "The assistant should ask clarifying questions like budget range, what type of product (gear, accessories), the friend's experience level, etc. A response that immediately lists products without asking questions is a FAIL. Does the assistant ask at least one clarifying question?",
+    expectToolCall: false,
+    maxChars: 600,
+  },
+  {
+    name: "Search uses short keywords (not full message)",
+    message: "I'm looking for something to protect my snowboard during travel",
+    current_page_url: `${STORE_DOMAIN}/`,
+    judgePrompt: "The assistant should search for relevant products (snowboard bags, travel cases, etc.) or ask what type of protection they need. The key test is that IF the assistant searches, it should find relevant results — NOT return 0 products. A response saying 'no products found' when the store has snowboard gear is a FAIL. Is the response helpful and relevant?",
+    expectToolCall: false,
+    maxChars: 600,
+  },
+  {
+    name: "Store policy via MCP tool",
+    message: "What is your shipping policy?",
+    current_page_url: `${STORE_DOMAIN}/`,
+    judgePrompt: "The assistant should attempt to find shipping policy info, either via the search_shop_policies_and_faqs tool or by giving a helpful generic answer. Does the response address shipping in some way?",
+    expectToolCall: false,
+    maxChars: 600,
   },
 ];
 
