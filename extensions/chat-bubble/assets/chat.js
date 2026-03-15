@@ -1064,16 +1064,18 @@
         if (serialized === this.lastPayload) return; // no change
         this.lastPayload = serialized;
 
-        var params = new URLSearchParams({
-          activity: 'true',
-          conversation_id: convId,
-          currentPageUrl: payload.currentPageUrl,
-          currentPageTitle: payload.currentPageTitle,
-          viewingProduct: payload.viewingProduct,
-          cartContents: payload.cartContents,
-        });
-        fetch('/apps/chat-agent/chat?' + params.toString(), { method: 'GET', mode: 'cors' })
-          .catch(function(err) { console.error('Activity send error:', err); });
+        // Use POST to avoid URL length limits with large cart data
+        fetch('/apps/chat-agent/chat?activity=true&conversation_id=' + encodeURIComponent(convId), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            currentPageUrl: payload.currentPageUrl,
+            currentPageTitle: payload.currentPageTitle,
+            viewingProduct: payload.viewingProduct,
+            cartContents: payload.cartContents,
+          }),
+          mode: 'cors',
+        }).catch(function(err) { console.error('Activity send error:', err); });
       },
 
       getProductInfo: function() {

@@ -149,6 +149,13 @@ export async function loader({ request }) {
  */
 export async function action({ request }) {
   const deps = await loadServerModules();
+  const url = new URL(request.url);
+
+  // Handle activity POST (cart/page updates from storefront)
+  if (url.searchParams.has('activity') && url.searchParams.has('conversation_id')) {
+    return handleActivityRequest(request, url, deps);
+  }
+
   return handleChatRequest(request, deps);
 }
 
@@ -233,9 +240,32 @@ async function handleActivityRequest(request, url, deps) {
   try {
     const conversationId = url.searchParams.get('conversation_id');
     const data = {};
-    for (const key of ['currentPageUrl', 'currentPageTitle', 'viewingProduct', 'cartContents']) {
-      if (url.searchParams.has(key)) data[key] = url.searchParams.get(key);
+    const keys = ['currentPageUrl', 'currentPageTitle', 'viewingProduct', 'cartContents'];
+
+    // Support both GET (query params) and POST (JSON body)
+    if (request.method === 'POST') {
+      try {
+        const rawText = await request.text();
+        let body;
+        try { body = JSON.parse(rawText); } catch {
+          // Shopify proxy may convert JSON to form-encoded
+          const params = new URLSearchParams(rawText);
+          body = {};
+          for (const key of keys) {
+            if (params.has(key)) body[key] = params.get(key);
+          }
+        }
+        for (const key of keys) {
+          if (body[key]) data[key] = body[key];
+        }
+      } catch { /* fall through to query params */ }
     }
+
+    // Fallback: read from query params (backward compat with GET)
+    for (const key of keys) {
+      if (!data[key] && url.searchParams.has(key)) data[key] = url.searchParams.get(key);
+    }
+
     await upsertCustomerActivity(conversationId, data);
     return new Response(null, { status: 204, headers: getCorsHeaders(request) });
   } catch (error) {
