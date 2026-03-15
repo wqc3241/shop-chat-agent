@@ -100,6 +100,12 @@ Hosted on Fly.io:
 - `assets/chat.js` — Client-side chat logic (UI, API calls, SSE, message rendering)
 - `assets/chat.css` — Chat widget styling (responsive, mobile-aware)
 
+### Mobile Chat UI
+- Chat window takes **75% (3/4) of viewport height** on mobile, positioned as a bottom sheet with rounded top corners
+- **Tap-outside-to-close**: semi-transparent backdrop overlay on the top 1/4; tapping it closes the chat
+- **Chat bubble hidden** when chat window is open to avoid overlapping the send button; reappears on close
+- No full-page body scroll lock — user can see part of the page behind the backdrop
+
 ## Conversational Shopping Assistant (System Prompt v6.0)
 
 The AI acts as a real in-store shopping assistant:
