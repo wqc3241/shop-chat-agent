@@ -646,6 +646,17 @@
     letter-spacing: 0.5px;
   }
 
+  .shop-ai-message-time {
+    font-size: 10px;
+    color: #999;
+    margin-top: 4px;
+    text-align: right;
+  }
+
+  .shop-ai-message.user .shop-ai-message-time {
+    color: rgba(255, 255, 255, 0.7);
+  }
+
   /* Mode indicator bar */
   .shop-ai-chat-status {
     font-size: 11px;
@@ -667,17 +678,21 @@
   /* Feedback buttons */
   .shop-ai-feedback {
     display: flex;
-    gap: 4px;
-    margin-top: 6px;
+    gap: 6px;
+    margin-top: 8px;
     justify-content: flex-start;
   }
 
   .shop-ai-feedback-btn {
-    background: none;
-    border: 1px solid #ddd;
-    border-radius: 14px;
-    padding: 2px 8px;
+    background: #f5f5f5;
+    border: none;
+    border-radius: 6px;
+    padding: 5px 8px;
     font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #888;
     cursor: pointer;
     opacity: 0.6;
     transition: opacity 0.2s, background-color 0.2s;
@@ -686,17 +701,32 @@
 
   .shop-ai-feedback-btn:hover:not(:disabled) {
     opacity: 1;
-    background-color: #f0f0f0;
+  }
+
+  .shop-ai-feedback-btn.good:hover:not(:disabled) {
+    background-color: #dcfce7;
+    color: #16a34a;
+  }
+
+  .shop-ai-feedback-btn.bad:hover:not(:disabled) {
+    background-color: #fee2e2;
+    color: #dc2626;
   }
 
   .shop-ai-feedback-btn:disabled {
     cursor: default;
   }
 
-  .shop-ai-feedback-btn.selected {
+  .shop-ai-feedback-btn.selected.good {
     opacity: 1;
-    background-color: #e8e8ff;
-    border-color: #5046e4;
+    background-color: #dcfce7;
+    color: #16a34a;
+  }
+
+  .shop-ai-feedback-btn.selected.bad {
+    opacity: 1;
+    background-color: #fee2e2;
+    color: #dc2626;
   }
 
   @keyframes typing {

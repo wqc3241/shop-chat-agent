@@ -339,7 +339,7 @@
        */
       send: async function(chatInput, messagesContainer) {
         const userMessage = chatInput.value.trim();
-        const conversationId = sessionStorage.getItem('shopAiConversationId');
+        const conversationId = localStorage.getItem('shopAiConversationId');
 
         // Add user message to chat
         this.add(userMessage, 'user', messagesContainer);
@@ -348,7 +348,7 @@
         chatInput.value = '';
 
         // Detect intent to talk to a human — route to handoff instead of AI
-        const currentMode = sessionStorage.getItem('shopAiChatMode');
+        const currentMode = localStorage.getItem('shopAiChatMode');
         if (currentMode !== 'merchant' && currentMode !== 'pending_merchant' && ShopAIChat.isHumanHandoffIntent(userMessage)) {
           ShopAIChat.requestHuman(userMessage);
           return;
@@ -373,7 +373,7 @@
        * @param {HTMLElement} messagesContainer - The messages container
        * @returns {HTMLElement} The created message element
        */
-      add: function(text, sender, messagesContainer) {
+      add: function(text, sender, messagesContainer, timestamp) {
         const messageElement = document.createElement('div');
         const cssClass = sender === 'merchant' ? 'merchant' : sender;
         messageElement.classList.add('shop-ai-message', cssClass);
@@ -393,6 +393,13 @@
         } else {
           messageElement.textContent = text;
         }
+
+        // Add timestamp
+        var ts = timestamp ? new Date(timestamp) : new Date();
+        var timeEl = document.createElement('div');
+        timeEl.className = 'shop-ai-message-time';
+        timeEl.textContent = ts.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        messageElement.appendChild(timeEl);
 
         messagesContainer.appendChild(messageElement);
         ShopAIChat.UI.scrollToBottom();
@@ -597,7 +604,7 @@
 
         try {
           const promptType = window.shopChatConfig?.promptType || "standardAssistant";
-          const currentMode = sessionStorage.getItem('shopAiChatMode') || 'ai';
+          const currentMode = localStorage.getItem('shopAiChatMode') || 'ai';
           const requestBody = JSON.stringify({
             message: userMessage,
             conversation_id: conversationId,
@@ -691,7 +698,7 @@
         switch (data.type) {
           case 'id':
             if (data.conversation_id) {
-              sessionStorage.setItem('shopAiConversationId', data.conversation_id);
+              localStorage.setItem('shopAiConversationId', data.conversation_id);
             }
             break;
 
@@ -768,14 +775,14 @@
 
           case 'auth_required':
             // Save the last user message for resuming after authentication
-            sessionStorage.setItem('shopAiLastMessage', userMessage || '');
+            localStorage.setItem('shopAiLastMessage', userMessage || '');
             break;
 
           case 'mode':
-            sessionStorage.setItem('shopAiChatMode', data.mode);
+            localStorage.setItem('shopAiChatMode', data.mode);
             ShopAIChat.ModeIndicator.update(data.mode);
             if (data.mode === 'merchant') {
-              const convId = sessionStorage.getItem('shopAiConversationId');
+              const convId = localStorage.getItem('shopAiConversationId');
               if (convId) {
                 ShopAIChat.Polling.start(convId, messagesContainer);
               }
@@ -866,7 +873,7 @@
 
           // Update mode from history response
           if (data.mode) {
-            sessionStorage.setItem('shopAiChatMode', data.mode);
+            localStorage.setItem('shopAiChatMode', data.mode);
             ShopAIChat.ModeIndicator.update(data.mode);
             if (data.mode === 'merchant') {
               ShopAIChat.Polling.start(conversationId, messagesContainer);
@@ -881,11 +888,11 @@
               const messageContents = JSON.parse(message.content);
               for (const contentBlock of messageContents) {
                 if (contentBlock.type === 'text' && typeof contentBlock.text === 'string' && contentBlock.text.trim() !== '') {
-                  el = ShopAIChat.Message.add(contentBlock.text, role, messagesContainer);
+                  el = ShopAIChat.Message.add(contentBlock.text, role, messagesContainer, message.createdAt);
                 }
               }
             } catch (e) {
-              el = ShopAIChat.Message.add(message.content, role, messagesContainer);
+              el = ShopAIChat.Message.add(message.content, role, messagesContainer, message.createdAt);
             }
             // Add feedback buttons to assistant messages from history
             if (el && role === 'assistant' && message.id) {
@@ -932,8 +939,8 @@
         const wrapper = document.createElement('div');
         wrapper.className = 'shop-ai-feedback';
         wrapper.innerHTML =
-          '<button class="shop-ai-feedback-btn" data-value="good" title="Good answer">&#128077;</button>' +
-          '<button class="shop-ai-feedback-btn" data-value="bad" title="Bad answer">&#128078;</button>';
+          '<button class="shop-ai-feedback-btn good" data-value="good" title="Helpful"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3H14z"/><path d="M7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg></button>' +
+          '<button class="shop-ai-feedback-btn bad" data-value="bad" title="Not helpful"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3H10z"/><path d="M17 2h3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-3"/></svg></button>';
         wrapper.querySelectorAll('.shop-ai-feedback-btn').forEach(function(btn) {
           btn.addEventListener('click', function() {
             ShopAIChat.Feedback.submit(messageElement, btn.dataset.value);
@@ -997,7 +1004,7 @@
       },
 
       send: function() {
-        var convId = sessionStorage.getItem('shopAiConversationId');
+        var convId = localStorage.getItem('shopAiConversationId');
         if (!convId) return;
 
         var payload = {
@@ -1110,7 +1117,7 @@
 
                   for (const contentBlock of messageContents) {
                     if (contentBlock.type === 'text' && typeof contentBlock.text === 'string' && contentBlock.text.trim() !== '') {
-                      ShopAIChat.Message.add(contentBlock.text, msg.role, messagesContainer);
+                      ShopAIChat.Message.add(contentBlock.text, msg.role, messagesContainer, msg.createdAt);
                       renderedTextBlock = true;
                     }
                   }
@@ -1119,16 +1126,16 @@
                     // Ignore structured non-text payloads like tool_use/tool_result during polling.
                   }
                 } catch (e) {
-                  ShopAIChat.Message.add(msg.content, msg.role, messagesContainer);
+                  ShopAIChat.Message.add(msg.content, msg.role, messagesContainer, msg.createdAt);
                 }
                 this.lastTimestamp = msg.createdAt;
               });
             }
 
             // Update mode if changed
-            const currentMode = sessionStorage.getItem('shopAiChatMode');
+            const currentMode = localStorage.getItem('shopAiChatMode');
             if (data.mode && data.mode !== currentMode) {
-              sessionStorage.setItem('shopAiChatMode', data.mode);
+              localStorage.setItem('shopAiChatMode', data.mode);
               ShopAIChat.ModeIndicator.update(data.mode);
             }
 
@@ -1232,7 +1239,7 @@
         }
 
         // Start polling for token availability
-        const conversationId = sessionStorage.getItem('shopAiConversationId');
+        const conversationId = localStorage.getItem('shopAiConversationId');
         if (conversationId) {
           const messagesContainer = document.querySelector('.shop-ai-chat-messages');
 
@@ -1254,13 +1261,13 @@
 
         console.log('Starting token polling for conversation:', conversationId);
         const pollingId = 'polling_' + Date.now();
-        sessionStorage.setItem('shopAiTokenPollingId', pollingId);
+        localStorage.setItem('shopAiTokenPollingId', pollingId);
 
         let attemptCount = 0;
         const maxAttempts = 30;
 
         const poll = async () => {
-          if (sessionStorage.getItem('shopAiTokenPollingId') !== pollingId) {
+          if (localStorage.getItem('shopAiTokenPollingId') !== pollingId) {
             console.log('Another polling session has started, stopping this one');
             return;
           }
@@ -1285,10 +1292,10 @@
 
             if (data.status === 'authorized') {
               console.log('Token available, resuming conversation');
-              const message = sessionStorage.getItem('shopAiLastMessage');
+              const message = localStorage.getItem('shopAiLastMessage');
 
               if (message) {
-                sessionStorage.removeItem('shopAiLastMessage');
+                localStorage.removeItem('shopAiLastMessage');
                 setTimeout(() => {
                   ShopAIChat.Message.add("Authorization successful! I'm now continuing with your request.",
                     'assistant', messagesContainer);
@@ -1297,7 +1304,7 @@
                 }, 500);
               }
 
-              sessionStorage.removeItem('shopAiTokenPollingId');
+              localStorage.removeItem('shopAiTokenPollingId');
               return;
             }
 
@@ -1456,14 +1463,14 @@
       this.UI.init(container);
 
       // Check for existing conversation
-      const conversationId = sessionStorage.getItem('shopAiConversationId');
+      const conversationId = localStorage.getItem('shopAiConversationId');
 
       if (conversationId) {
         // Fetch conversation history and restore mode
         this.API.fetchChatHistory(conversationId, this.UI.elements.messagesContainer);
 
         // Restore mode from sessionStorage and resume polling if needed
-        const savedMode = sessionStorage.getItem('shopAiChatMode');
+        const savedMode = localStorage.getItem('shopAiChatMode');
         if (savedMode && savedMode !== 'ai') {
           this.ModeIndicator.update(savedMode);
           if (savedMode === 'merchant' || savedMode === 'pending_merchant') {
@@ -1504,10 +1511,10 @@
      * @param {string} userMessage - The customer's original message
      */
     requestHuman: function(userMessage) {
-      const conversationId = sessionStorage.getItem('shopAiConversationId');
+      const conversationId = localStorage.getItem('shopAiConversationId');
       const messagesContainer = this.UI.elements.messagesContainer;
 
-      sessionStorage.setItem('shopAiChatMode', 'pending_merchant');
+      localStorage.setItem('shopAiChatMode', 'pending_merchant');
       this.ModeIndicator.update('pending_merchant');
 
       // Send request_human flag to backend with the customer's actual message
