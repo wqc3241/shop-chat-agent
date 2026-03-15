@@ -183,6 +183,8 @@
        */
       showTypingIndicator: function() {
         const { messagesContainer } = this.elements;
+        // Only add if one doesn't already exist
+        if (messagesContainer.querySelector('.shop-ai-typing-indicator')) return;
 
         const typingIndicator = document.createElement('div');
         typingIndicator.classList.add('shop-ai-typing-indicator');
