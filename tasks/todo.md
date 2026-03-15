@@ -11,12 +11,26 @@
 - [x] Add feedback test case to chat-test.mjs
 - [x] Update CLAUDE.md
 
-## Feature 2: Support Hours Setting - DONE
+## Feature 2: Support Hours Setting - DONE (v1 structured inputs)
 - [x] Add support hours fields to ChatSettings in schema.prisma
 - [x] Create migration SQL
 - [x] Add "Support Hours" card in app.settings.jsx
 - [x] Check business hours in chat.jsx before allowing human handoff
 - [x] Expose support hours to storefront widget (support_unavailable SSE event)
+- [x] Update CLAUDE.md
+
+## Feature: Natural Language Support Hours (v2)
+- [x] Update schema: replace 4 fields with supportHoursText + supportSchedule
+- [x] Create data migration SQL (preserves existing settings)
+- [x] Create schedule-parser.server.js (OpenAI NL→JSON parser)
+- [x] Update settings UI: single text area + parsed preview
+- [x] Rewrite isWithinSupportHours() with overrides + windows
+- [x] Update SSE event to send displayText + reason
+- [x] Update storefront support_unavailable handler
+- [x] Build passes (npm run build)
+- [x] Verify via Codex review (Rule 8 compliance) — used gpt-5.3-codex via Responses API
+- [x] Write end-to-end test cases (tests/support-hours-test.mjs, 10 cases)
+- [x] Run tests and confirm passing (10/10)
 - [x] Update CLAUDE.md
 
 ## Feature 3: Real-Time Customer Activity Tracking - DONE

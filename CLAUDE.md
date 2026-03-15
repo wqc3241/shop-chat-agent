@@ -41,6 +41,7 @@ The dev server port is dynamic (assigned by Vite at startup). On `predev`, Prism
 - `tool.server.js` — Tool response processing, product search result formatting
 - `streaming.server.js` — SSE StreamManager with backpressure handling
 - `websearch.server.js` — OpenAI-backed web search (Responses API)
+- `schedule-parser.server.js` — OpenAI-based natural language → JSON schedule parser (gpt-4o-mini)
 - `config.server.js` — Centralized config (model, max tokens: 1200, prompt type, conversation max history: 20)
 
 **Other key files:**
@@ -181,6 +182,18 @@ Key behaviors to know when sending requests through the proxy (`/apps/chat-agent
 - **Content-Type conversion**: Proxy converts `application/json` POST bodies to `application/x-www-form-urlencoded`
 - **Error masking**: Non-200 responses get replaced with store's HTML error page
 - **Added parameters**: Proxy adds `shop`, `logged_in_customer_id`, `path_prefix`, `timestamp`, `signature`
+
+## Natural Language Support Hours
+
+Merchants describe support hours in plain language (single text field) instead of structured inputs. OpenAI parses the text into a JSON schedule at save time, so runtime checks remain fast.
+
+- **Settings UI**: Single `<s-text-area>` with examples; parsed `displayText` preview shown after save
+- **Parser**: `schedule-parser.server.js` calls `gpt-4o-mini` with `response_format: { type: "json_object" }` to convert NL → structured JSON
+- **Schedule JSON** has: `timezone`, `windows` (recurring weekly), `overrides` (date-specific holidays/custom hours), `alwaysAvailable`, `displayText`
+- **Runtime check**: `isWithinSupportHours(settings, nowDate?)` checks overrides first (date match), then falls back to windows. Fails open on parse errors.
+- **Override reasons**: When outside hours due to an override with a `reason`, the reason is included in the SSE event and shown to the customer
+- **DB fields**: `ChatSettings.supportHoursText` (raw NL text) + `ChatSettings.supportSchedule` (parsed JSON string)
+- **Tests**: `tests/support-hours-test.mjs` — 10 deterministic unit tests for `isWithinSupportHours()`
 
 ## Testing
 

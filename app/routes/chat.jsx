@@ -491,8 +491,9 @@ async function handleChatSession({
     // Handle "request human" — check support hours before setting pending_merchant
     if (requestHuman && conversation) {
       const supportSettings = chatSettingsResult?.status === 'fulfilled' ? chatSettingsResult.value : null;
-      if (supportSettings?.supportHoursStart && supportSettings?.supportHoursEnd) {
-        if (!isWithinSupportHours(supportSettings)) {
+      if (supportSettings?.supportSchedule) {
+        const hourCheck = isWithinSupportHours(supportSettings);
+        if (!hourCheck.available) {
           // Outside support hours — inject system context for AI to respond
           conversationHistory = (dbMessagesResult.status === 'fulfilled' ? dbMessagesResult.value : []).map(dbMessage => {
             let content;
@@ -501,7 +502,10 @@ async function handleChatSession({
             return { role, content };
           });
           // Don't set pending_merchant mode; inform via SSE
-          stream.sendMessage({ type: 'support_unavailable', hours: `${supportSettings.supportHoursStart}-${supportSettings.supportHoursEnd}`, timezone: supportSettings.supportTimezone, days: supportSettings.supportDays });
+          const sseData = { type: 'support_unavailable' };
+          if (hourCheck.displayText) sseData.displayText = hourCheck.displayText;
+          if (hourCheck.reason) sseData.reason = hourCheck.reason;
+          stream.sendMessage(sseData);
         } else {
           await updateConversation(conversationId, { mode: 'pending_merchant' });
         }
@@ -1199,39 +1203,71 @@ function hasLikelyExactMatch(query = "", products = []) {
 }
 
 /**
- * Check if current time is within merchant's configured support hours
+ * Check if current time is within merchant's configured support hours.
+ * Returns { available: true } or { available: false, reason?: string, displayText?: string }
  */
-function isWithinSupportHours(settings) {
-  if (!settings?.supportHoursStart || !settings?.supportHoursEnd) return true;
+function isWithinSupportHours(settings, nowDate = new Date()) {
+  if (!settings?.supportSchedule) return { available: true };
 
-  const tz = settings.supportTimezone || 'America/New_York';
-  const now = new Date();
+  let schedule;
+  try {
+    schedule = JSON.parse(settings.supportSchedule);
+  } catch {
+    return { available: true }; // fail open on parse error
+  }
 
-  // Get current time in merchant's timezone
-  const formatter = new Intl.DateTimeFormat('en-US', {
+  if (schedule.alwaysAvailable) return { available: true };
+
+  const tz = schedule.timezone || 'America/New_York';
+  const now = nowDate;
+
+  // Get current date/time in merchant's timezone
+  const dateFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: tz }); // YYYY-MM-DD
+  const todayStr = dateFormatter.format(now);
+
+  const timeFormatter = new Intl.DateTimeFormat('en-US', {
     timeZone: tz,
     hour: '2-digit',
     minute: '2-digit',
     hour12: false,
     weekday: 'short',
   });
-  const parts = formatter.formatToParts(now);
+  const parts = timeFormatter.formatToParts(now);
   const hour = parseInt(parts.find(p => p.type === 'hour')?.value || '0', 10);
   const minute = parseInt(parts.find(p => p.type === 'minute')?.value || '0', 10);
   const weekday = parts.find(p => p.type === 'weekday')?.value || '';
-
-  // Check day
-  const supportDays = (settings.supportDays || 'Mon,Tue,Wed,Thu,Fri').split(',');
-  if (!supportDays.includes(weekday)) return false;
-
-  // Check time range
-  const [startH, startM] = settings.supportHoursStart.split(':').map(Number);
-  const [endH, endM] = settings.supportHoursEnd.split(':').map(Number);
   const currentMinutes = hour * 60 + minute;
-  const startMinutes = startH * 60 + startM;
-  const endMinutes = endH * 60 + endM;
 
-  return currentMinutes >= startMinutes && currentMinutes < endMinutes;
+  // Check overrides first (specific date takes priority)
+  if (schedule.overrides?.length) {
+    const override = schedule.overrides.find(o => o.date === todayStr);
+    if (override) {
+      if (override.closed) {
+        return { available: false, reason: override.reason, displayText: schedule.displayText };
+      }
+      // Custom hours for this date
+      const [startH, startM] = override.startTime.split(':').map(Number);
+      const [endH, endM] = override.endTime.split(':').map(Number);
+      const inRange = currentMinutes >= (startH * 60 + startM) && currentMinutes < (endH * 60 + endM);
+      return inRange
+        ? { available: true }
+        : { available: false, reason: override.reason, displayText: schedule.displayText };
+    }
+  }
+
+  // Fall back to recurring windows
+  if (!schedule.windows?.length) return { available: true };
+
+  for (const window of schedule.windows) {
+    if (!window.days.includes(weekday)) continue;
+    const [startH, startM] = window.startTime.split(':').map(Number);
+    const [endH, endM] = window.endTime.split(':').map(Number);
+    if (currentMinutes >= (startH * 60 + startM) && currentMinutes < (endH * 60 + endM)) {
+      return { available: true };
+    }
+  }
+
+  return { available: false, displayText: schedule.displayText };
 }
 
 function withTimeout(promise, timeoutMs, timeoutMessage = "Operation timed out") {

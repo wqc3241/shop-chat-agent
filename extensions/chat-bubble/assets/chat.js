@@ -861,14 +861,11 @@
             break;
 
           case 'support_unavailable':
-            ShopAIChat.Message.add(
-              'Our support team is available ' + (data.days || 'Mon-Fri') +
-              ' from ' + (data.hours || '9:00-17:00') +
-              ' (' + (data.timezone || 'ET').replace(/^America\//, '').replace(/_/g, ' ') +
-              '). I\'ll keep helping you in the meantime!',
-              'assistant',
-              messagesContainer
-            );
+            var unavailMsg = 'Our sales specialists are currently unavailable.';
+            if (data.reason) unavailMsg += ' ' + data.reason + '.';
+            if (data.displayText) unavailMsg += ' Our support hours are ' + data.displayText + '.';
+            unavailMsg += ' I\'ll keep helping you in the meantime!';
+            ShopAIChat.Message.add(unavailMsg, 'assistant', messagesContainer);
             break;
         }
       },
