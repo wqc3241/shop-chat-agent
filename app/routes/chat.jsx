@@ -260,10 +260,15 @@ async function handleActivityRequest(request, url, deps) {
   const { upsertCustomerActivity } = deps;
   try {
     const conversationId = url.searchParams.get('conversation_id');
-    // Heartbeat: just touch updatedAt, no data needed
+    // Heartbeat: touch updatedAt and return current mode so storefront can detect takeover
     if (url.searchParams.get('heartbeat') === 'true') {
+      const { getConversation } = deps;
       await upsertCustomerActivity(conversationId, {});
-      return new Response(null, { status: 204, headers: getCorsHeaders(request) });
+      const conv = await getConversation(conversationId);
+      return new Response(JSON.stringify({ mode: conv?.mode || 'ai' }), {
+        status: 200,
+        headers: { ...getCorsHeaders(request), 'Content-Type': 'application/json' },
+      });
     }
 
     const data = {};

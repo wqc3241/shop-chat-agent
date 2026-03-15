@@ -1028,12 +1028,27 @@
           this.interceptCartMutations();
           this.intercepted = true;
         }
-        // Lightweight heartbeat every 15s so merchant knows customer is online
+        // Lightweight heartbeat every 15s — also detects merchant takeover via mode in response
         this.heartbeatTimer = setInterval(function() {
           var convId = localStorage.getItem('shopAiConversationId');
           if (!convId) return;
           var params = new URLSearchParams({ activity: 'true', conversation_id: convId, heartbeat: 'true' });
-          fetch('/apps/chat-agent/chat?' + params.toString(), { method: 'GET', mode: 'cors' }).catch(function() {});
+          fetch('/apps/chat-agent/chat?' + params.toString(), { method: 'GET', mode: 'cors' })
+            .then(function(res) { return res.json(); })
+            .then(function(data) {
+              if (!data || !data.mode) return;
+              var currentMode = localStorage.getItem('shopAiChatMode') || 'ai';
+              if (data.mode !== currentMode) {
+                localStorage.setItem('shopAiChatMode', data.mode);
+                ShopAIChat.ModeIndicator.update(data.mode);
+                if (data.mode === 'merchant' || data.mode === 'pending_merchant') {
+                  ShopAIChat.Polling.start(convId, ShopAIChat.UI.elements.messagesContainer);
+                } else if (data.mode === 'ai') {
+                  ShopAIChat.Polling.stop();
+                }
+              }
+            })
+            .catch(function() {});
         }, 15000);
       },
 
@@ -1231,7 +1246,10 @@
               ShopAIChat.ModeIndicator.update(data.mode);
             }
 
-            // Keep polling even in AI mode so we can detect merchant takeovers
+            // If mode changed back to AI, stop polling (heartbeat will detect future takeovers)
+            if (data.mode === 'ai') {
+              this.stop();
+            }
           } catch (e) {
             console.warn('Polling error:', e);
           }
@@ -1561,13 +1579,15 @@
         // Start activity tracking immediately for existing conversations
         this.Activity.start();
 
-        // Restore mode indicator and always start polling so storefront
-        // can discover merchant takeovers and receive merchant messages
+        // Restore mode indicator and start polling only if merchant is active
         const savedMode = localStorage.getItem('shopAiChatMode');
         if (savedMode && savedMode !== 'ai') {
           this.ModeIndicator.update(savedMode);
+          if (savedMode === 'merchant' || savedMode === 'pending_merchant') {
+            this.Polling.start(conversationId, this.UI.elements.messagesContainer);
+          }
         }
-        this.Polling.start(conversationId, this.UI.elements.messagesContainer);
+        // Heartbeat will detect future takeovers via mode in response
       } else {
         // No previous conversation, show welcome message
         const welcomeMessage = window.shopChatConfig?.welcomeMessage || "👋 Hi there! How can I help you today?";
