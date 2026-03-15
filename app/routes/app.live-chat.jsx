@@ -814,6 +814,10 @@ export default function LiveChat() {
                             ))}
                             {items.length > 5 && <div style={{ fontSize: "12px", color: "#94a3b8" }}>+{items.length - 5} more</div>}
                           </div>
+                          <div style={{ marginTop: "6px", paddingTop: "6px", borderTop: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", fontSize: "13px", fontWeight: 600 }}>
+                            <span style={{ color: "#334155" }}>Total</span>
+                            <span style={{ color: "#0f172a" }}>${items.reduce((sum, item) => sum + (parseFloat(item.price) || 0) * (item.quantity || 1), 0).toFixed(2)}</span>
+                          </div>
                         </div>
                       );
                     } catch { return null; }
