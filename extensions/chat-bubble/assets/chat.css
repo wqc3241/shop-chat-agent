@@ -72,16 +72,23 @@
     .shop-ai-chat-window {
       position: fixed;
       width: 100vw;
-      height: 100vh;
-      height: calc(var(--viewport-height, 100vh));
-      top: 0;
+      height: 66vh;
+      height: calc(var(--viewport-height, 100vh) * 0.66);
+      top: auto;
       left: 0;
       right: 0;
       bottom: 0;
       max-width: none;
-      min-height: 100vh;
-      min-height: calc(var(--viewport-height, 100vh));
-      border-radius: 0;
+      max-height: none;
+      min-height: 300px;
+      border-radius: 16px 16px 0 0;
+      transform: translateY(100%);
+      z-index: 999999;
+      transition: transform 0.4s ease, opacity 0.3s ease;
+    }
+
+    .shop-ai-chat-window.active {
+      transform: translateY(0);
     }
 
     .shop-ai-chat-container {
@@ -92,18 +99,31 @@
     .shop-ai-message {
       max-width: 90%;
     }
-    
-    /* Prevent scrolling on the main page when chat is open */
-    body.shop-ai-chat-open {
-      overflow: hidden;
-      position: fixed;
-      width: 100%;
-      height: 100%;
+
+    /* Hide bubble when chat is open */
+    .shop-ai-chat-bubble.hidden {
+      display: none !important;
     }
-    
+
+    /* Backdrop overlay for tap-outside-to-close */
+    .shop-ai-chat-backdrop {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: rgba(0, 0, 0, 0.3);
+      z-index: 999998;
+    }
+
+    .shop-ai-chat-backdrop.active {
+      display: block;
+    }
+
     .shop-ai-chat-header {
       padding: 12px 16px;
-      border-radius: 0;
+      border-radius: 16px 16px 0 0;
     }
   }
 
@@ -111,23 +131,6 @@
     opacity: 1;
     pointer-events: all;
     transform: translateY(0);
-  }
-  
-  @media (max-width: 480px) {
-    .shop-ai-chat-window {
-      transform: translateY(100%);
-      z-index: 999999;
-      transition: transform 0.4s ease, opacity 0.3s ease;
-    }
-    
-    .shop-ai-chat-window.active {
-      transform: translateY(0);
-    }
-    
-    .shop-ai-chat-bubble {
-      z-index: 1000000;
-      position: relative;
-    }
   }
 
   .shop-ai-chat-header {

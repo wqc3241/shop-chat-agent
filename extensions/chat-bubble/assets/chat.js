@@ -48,6 +48,11 @@
         // Fix for iOS Safari viewport height issues
         if (this.isMobile) {
           this.setupMobileViewport();
+          // Create backdrop overlay for tap-outside-to-close on mobile
+          this.backdrop = document.createElement('div');
+          this.backdrop.className = 'shop-ai-chat-backdrop';
+          this.backdrop.addEventListener('click', () => this.closeChatWindow());
+          container.appendChild(this.backdrop);
         }
       },
 
@@ -119,14 +124,17 @@
        * Toggle chat window visibility
        */
       toggleChatWindow: function() {
-        const { chatWindow, chatInput } = this.elements;
+        const { chatWindow, chatInput, chatBubble } = this.elements;
 
         chatWindow.classList.toggle('active');
+        const isOpen = chatWindow.classList.contains('active');
 
-        if (chatWindow.classList.contains('active')) {
-          // On mobile, prevent body scrolling and delay focus
+        if (isOpen) {
+          // Hide bubble on mobile to avoid overlapping send button
+          if (this.isMobile && chatBubble) chatBubble.classList.add('hidden');
+          if (this.isMobile && this.backdrop) this.backdrop.classList.add('active');
+          // On mobile, delay focus
           if (this.isMobile) {
-            document.body.classList.add('shop-ai-chat-open');
             setTimeout(() => chatInput.focus(), 500);
           } else {
             chatInput.focus();
@@ -136,8 +144,9 @@
           // Start activity tracking
           ShopAIChat.Activity.start();
         } else {
-          // Remove body class when closing
-          document.body.classList.remove('shop-ai-chat-open');
+          // Show bubble again, hide backdrop
+          if (chatBubble) chatBubble.classList.remove('hidden');
+          if (this.backdrop) this.backdrop.classList.remove('active');
         }
       },
 
@@ -145,16 +154,17 @@
        * Close chat window
        */
       closeChatWindow: function() {
-        const { chatWindow, chatInput } = this.elements;
+        const { chatWindow, chatInput, chatBubble } = this.elements;
 
         chatWindow.classList.remove('active');
+        if (chatBubble) chatBubble.classList.remove('hidden');
+        if (this.backdrop) this.backdrop.classList.remove('active');
         ShopAIChat.Voice.stopListening();
         ShopAIChat.Activity.stop();
 
-        // On mobile, blur input to hide keyboard and enable body scrolling
+        // On mobile, blur input to hide keyboard
         if (this.isMobile) {
           chatInput.blur();
-          document.body.classList.remove('shop-ai-chat-open');
         }
       },
 
