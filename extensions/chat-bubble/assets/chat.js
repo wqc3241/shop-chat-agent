@@ -1041,14 +1041,12 @@
         fetch('/cart.js', { method: 'GET', headers: { 'Accept': 'application/json' } })
           .then(function(res) { return res.json(); })
           .then(function(cart) {
-            payload.cartContents = JSON.stringify((cart.items || []).map(function(item) {
+            payload.cartContents = JSON.stringify((cart.items || []).slice(0, 10).map(function(item) {
               return {
                 title: item.title,
                 quantity: item.quantity,
                 price: (item.price / 100).toFixed(2),
-                image: item.image,
                 variantTitle: item.variant_title,
-                url: item.url,
               };
             }));
             ShopAIChat.Activity._sendToServer(convId, payload);
@@ -1064,18 +1062,18 @@
         if (serialized === this.lastPayload) return; // no change
         this.lastPayload = serialized;
 
-        // Use POST to avoid URL length limits with large cart data
-        fetch('/apps/chat-agent/chat?activity=true&conversation_id=' + encodeURIComponent(convId), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            currentPageUrl: payload.currentPageUrl,
-            currentPageTitle: payload.currentPageTitle,
-            viewingProduct: payload.viewingProduct,
-            cartContents: payload.cartContents,
-          }),
-          mode: 'cors',
-        }).catch(function(err) { console.error('Activity send error:', err); });
+        // Use GET with query params (Shopify proxy reliably passes these)
+        // Truncate long fields to stay within URL length limits
+        var params = new URLSearchParams({
+          activity: 'true',
+          conversation_id: convId,
+          currentPageUrl: (payload.currentPageUrl || '').slice(0, 500),
+          currentPageTitle: (payload.currentPageTitle || '').slice(0, 200),
+          viewingProduct: (payload.viewingProduct || '').slice(0, 500),
+          cartContents: (payload.cartContents || '').slice(0, 2000),
+        });
+        fetch('/apps/chat-agent/chat?' + params.toString(), { method: 'GET', mode: 'cors' })
+          .catch(function(err) { console.error('Activity send error:', err); });
       },
 
       getProductInfo: function() {
@@ -1493,6 +1491,9 @@
       if (conversationId) {
         // Fetch conversation history and restore mode
         this.API.fetchChatHistory(conversationId, this.UI.elements.messagesContainer);
+
+        // Start activity tracking immediately for existing conversations
+        this.Activity.start();
 
         // Restore mode from sessionStorage and resume polling if needed
         const savedMode = localStorage.getItem('shopAiChatMode');

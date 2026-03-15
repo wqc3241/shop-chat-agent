@@ -153,7 +153,28 @@ export async function action({ request }) {
 
   // Handle activity POST (cart/page updates from storefront)
   if (url.searchParams.has('activity') && url.searchParams.has('conversation_id')) {
+    console.log('Activity POST received for conversation:', url.searchParams.get('conversation_id'));
     return handleActivityRequest(request, url, deps);
+  }
+
+  // Also check if activity params are in the POST body (proxy may move them)
+  if (!url.searchParams.has('activity')) {
+    const contentType = request.headers.get('content-type') || '';
+    if (contentType.includes('form-urlencoded')) {
+      const cloned = request.clone();
+      try {
+        const text = await cloned.text();
+        const formParams = new URLSearchParams(text);
+        if (formParams.has('activity') && formParams.has('conversation_id')) {
+          console.log('Activity POST (form-encoded body) for conversation:', formParams.get('conversation_id'));
+          // Reconstruct a URL with the params for handleActivityRequest
+          for (const [k, v] of formParams.entries()) {
+            if (!url.searchParams.has(k)) url.searchParams.set(k, v);
+          }
+          return handleActivityRequest(request, url, deps);
+        }
+      } catch { /* fall through */ }
+    }
   }
 
   return handleChatRequest(request, deps);
