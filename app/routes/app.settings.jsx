@@ -3,45 +3,51 @@ import { useLoaderData, useActionData, useNavigation, Form } from "react-router"
 import { authenticate } from "../shopify.server";
 import { getChatSettings, saveChatSettings } from "../db.server";
 
-async function fetchStorePolicies(shop) {
+async function fetchStorePolicies(admin) {
   try {
-    const mcpUrl = `https://${shop}/api/mcp`;
-    const response = await fetch(mcpUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        method: "tools/call",
-        id: 1,
-        params: {
-          name: "search_shop_policies_and_faqs",
-          arguments: { query: "return policy shipping policy contact information terms of service", context: "merchant checking synced policies" },
-        },
-      }),
-    });
-    if (!response.ok) return null;
+    const response = await admin.graphql(`
+      query {
+        shop {
+          shopPolicies {
+            type
+            title
+            body
+            updatedAt
+          }
+        }
+      }
+    `);
     const data = await response.json();
-    const text = data?.result?.content?.[0]?.text;
-    return text || null;
-  } catch {
-    return null;
+    const policies = data?.data?.shop?.shopPolicies || [];
+    // Filter out empty policies and strip HTML tags for preview
+    return policies
+      .filter(p => p.body && p.body.trim().length > 0)
+      .map(p => ({
+        type: p.type,
+        title: p.title,
+        body: p.body.replace(/<[^>]*>/g, '').trim(),
+        updatedAt: p.updatedAt,
+      }));
+  } catch (e) {
+    console.error('Error fetching policies:', e);
+    return [];
   }
 }
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   const settings = await getChatSettings(session.shop);
-  const policies = await fetchStorePolicies(session.shop);
+  const policies = await fetchStorePolicies(admin);
   return { settings, policies, syncedAt: new Date().toISOString() };
 };
 
 export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   const formData = await request.formData();
 
   // Handle re-sync action
   if (formData.get("_action") === "resync") {
-    const policies = await fetchStorePolicies(session.shop);
+    const policies = await fetchStorePolicies(admin);
     return { resync: true, policies, syncedAt: new Date().toISOString() };
   }
 
@@ -193,17 +199,23 @@ export default function Settings() {
                   </button>
                 </div>
 
-                {displayPolicies && (
-                  <div style={{ backgroundColor: "#f8fafc", borderRadius: "8px", border: "1px solid #e2e8f0", padding: "12px", maxHeight: "200px", overflowY: "auto" }}>
-                    <div style={{ fontSize: "12px", fontWeight: 600, color: "#64748b", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.5px" }}>Synced Policies Preview</div>
-                    <div style={{ fontSize: "13px", color: "#334155", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>
-                      {typeof displayPolicies === 'string' ? displayPolicies.slice(0, 1000) : JSON.stringify(displayPolicies).slice(0, 1000)}
-                      {(typeof displayPolicies === 'string' ? displayPolicies.length : JSON.stringify(displayPolicies).length) > 1000 && "..."}
+                {displayPolicies && displayPolicies.length > 0 && (
+                  <div style={{ backgroundColor: "#f8fafc", borderRadius: "8px", border: "1px solid #e2e8f0", padding: "12px", maxHeight: "250px", overflowY: "auto" }}>
+                    <div style={{ fontSize: "12px", fontWeight: 600, color: "#64748b", marginBottom: "8px", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                      Synced Policies ({displayPolicies.length})
                     </div>
+                    {displayPolicies.map((policy, i) => (
+                      <div key={i} style={{ marginBottom: i < displayPolicies.length - 1 ? "10px" : 0, paddingBottom: i < displayPolicies.length - 1 ? "10px" : 0, borderBottom: i < displayPolicies.length - 1 ? "1px solid #e2e8f0" : "none" }}>
+                        <div style={{ fontSize: "13px", fontWeight: 600, color: "#0f172a", marginBottom: "4px" }}>{policy.title}</div>
+                        <div style={{ fontSize: "12px", color: "#475569", lineHeight: 1.4 }}>
+                          {policy.body.slice(0, 200)}{policy.body.length > 200 ? "..." : ""}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
 
-                {!displayPolicies && (
+                {(!displayPolicies || displayPolicies.length === 0) && (
                   <s-banner tone="warning">
                     No policies found. Set up your store policies in Shopify admin → Settings → Policies, then click Re-sync.
                   </s-banner>
