@@ -19,6 +19,7 @@
 import { config } from "dotenv";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
+import { PrismaClient } from "@prisma/client";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 config({ path: resolve(__dirname, "..", ".env") });
@@ -41,6 +42,30 @@ const MAX_RESPONSE_CHARS = parseInt(param("max-chars", "800"), 10);
 
 // ── Store config ────────────────────────────────────────────────────
 const STORE_DOMAIN = param("store-domain", "https://dev-nlp-brochure-2.myshopify.com");
+const SHOP_HOSTNAME = new URL(STORE_DOMAIN).hostname;
+
+// ── Support hours test helpers ──────────────────────────────────────
+const prisma = new PrismaClient();
+const TODAY_ET = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
+
+async function configureSupportHours(supportHoursText, supportSchedule) {
+  await prisma.chatSettings.upsert({
+    where: { shop: SHOP_HOSTNAME },
+    update: {
+      supportHoursText: supportHoursText || '',
+      supportSchedule: supportSchedule ? JSON.stringify(supportSchedule) : '',
+    },
+    create: {
+      shop: SHOP_HOSTNAME,
+      supportHoursText: supportHoursText || '',
+      supportSchedule: supportSchedule ? JSON.stringify(supportSchedule) : '',
+    },
+  });
+}
+
+async function resetSupportHours() {
+  await configureSupportHours('', null);
+}
 
 // ── Test scenarios ──────────────────────────────────────────────────
 const TEST_CASES = [
@@ -180,6 +205,165 @@ const TEST_CASES = [
     expectToolCall: false,
     maxChars: 600,
   },
+  // ── Support hours / human handoff tests ────────────────────────────
+  {
+    name: "Request human during business hours",
+    message: "Can I talk to a real person?",
+    current_page_url: `${STORE_DOMAIN}/`,
+    judgePrompt: "User explicitly requests a human. Response should clearly acknowledge the handoff request and either confirm connection to a human agent or explain current availability and next steps without ignoring the request. Tone should be supportive and concise.",
+    expectToolCall: false,
+    maxChars: 600,
+    requestHuman: true,
+  },
+  {
+    name: "Request human with different phrasing",
+    message: "I need to speak with someone from your team",
+    current_page_url: `${STORE_DOMAIN}/`,
+    judgePrompt: "User is asking for human support using alternative phrasing. Response should recognize this as a human handoff request, acknowledge it directly, and provide clear next steps (connect now or explain availability/hours).",
+    expectToolCall: false,
+    maxChars: 600,
+    requestHuman: true,
+  },
+  {
+    name: "Ask about support hours",
+    message: "What are your support hours?",
+    current_page_url: `${STORE_DOMAIN}/`,
+    judgePrompt: "User asks for support hours only. Response should provide support/contact hours if known from store knowledge, or transparently state uncertainty and suggest where/how to confirm. It should not force a handoff flow.",
+    expectToolCall: false,
+    maxChars: 600,
+  },
+  {
+    name: "Request human and ask about hours",
+    message: "I want to talk to a human, when are you available?",
+    current_page_url: `${STORE_DOMAIN}/`,
+    judgePrompt: "User has dual intent: human handoff plus availability question. Response should acknowledge desire to speak to a human and also address support availability/hours. If unavailable, it should communicate that clearly while continuing to help politely.",
+    expectToolCall: false,
+    maxChars: 600,
+    requestHuman: true,
+  },
+  {
+    name: "Frustrated customer wanting human",
+    message: "This isn't helping, let me talk to a manager",
+    current_page_url: `${STORE_DOMAIN}/`,
+    judgePrompt: "User is frustrated and requests escalation to a human/manager. Response should show empathy, acknowledge frustration, and attempt escalation or explain availability and next steps. It should avoid sounding dismissive.",
+    expectToolCall: false,
+    maxChars: 600,
+    requestHuman: true,
+  },
+  {
+    name: "Ask if support is available now",
+    message: "Is anyone from your team available right now?",
+    current_page_url: `${STORE_DOMAIN}/`,
+    judgePrompt: "User asks about immediate support availability. Response should directly address whether human support is currently available (or provide hours/limitations if unknown) and offer helpful alternatives in the meantime.",
+    expectToolCall: false,
+    maxChars: 600,
+  },
+  // ── Support hours E2E tests (configure DB before each) ────────────
+  {
+    name: "Request human — outside configured hours",
+    message: "I need a human support agent right now.",
+    current_page_url: `${STORE_DOMAIN}/`,
+    judgePrompt: "User requested human help but support is outside configured hours (3-4am). Verify a support_unavailable signal appears with the display text, and the AI continues helping instead of handing off.",
+    expectToolCall: false,
+    maxChars: 600,
+    requestHuman: true,
+    setupHours: {
+      text: "Mon-Fri 3am-4am ET",
+      schedule: {
+        timezone: "America/New_York",
+        windows: [{ days: ["Mon","Tue","Wed","Thu","Fri"], startTime: "03:00", endTime: "04:00" }],
+        overrides: [],
+        alwaysAvailable: false,
+        displayText: "Monday-Friday 3:00 AM - 4:00 AM ET",
+      },
+    },
+  },
+  {
+    name: "Request human — within configured hours",
+    message: "Please connect me to a human agent.",
+    current_page_url: `${STORE_DOMAIN}/`,
+    judgePrompt: "Support is configured as available every day all day (00:00-23:59). There should be NO support_unavailable event. The assistant should acknowledge the handoff request.",
+    expectToolCall: false,
+    maxChars: 600,
+    requestHuman: true,
+    setupHours: {
+      text: "Every day 12am-11:59pm ET",
+      schedule: {
+        timezone: "America/New_York",
+        windows: [{ days: ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"], startTime: "00:00", endTime: "23:59" }],
+        overrides: [],
+        alwaysAvailable: false,
+        displayText: "Every day 12:00 AM - 11:59 PM ET",
+      },
+    },
+  },
+  {
+    name: "Request human — 24/7 availability",
+    message: "I want to speak with a real person.",
+    current_page_url: `${STORE_DOMAIN}/`,
+    judgePrompt: "Support is set to 24/7 (alwaysAvailable). There should be NO support_unavailable event. The assistant should acknowledge the handoff request without any unavailability message.",
+    expectToolCall: false,
+    maxChars: 600,
+    requestHuman: true,
+    setupHours: {
+      text: "24/7",
+      schedule: {
+        timezone: "America/New_York",
+        windows: [],
+        overrides: [],
+        alwaysAvailable: true,
+        displayText: "24/7 support",
+      },
+    },
+  },
+  {
+    name: "Request human — holiday override closed",
+    message: "Can you get me to a support representative?",
+    current_page_url: `${STORE_DOMAIN}/`,
+    judgePrompt: `Normal schedule is open all day, but today (${TODAY_ET}) has a closed override with reason "Company Retreat". Verify support_unavailable is emitted and includes "Company Retreat".`,
+    expectToolCall: false,
+    maxChars: 600,
+    requestHuman: true,
+    setupHours: {
+      text: `Every day 12am-11:59pm ET, closed ${TODAY_ET} for Company Retreat`,
+      schedule: {
+        timezone: "America/New_York",
+        windows: [{ days: ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"], startTime: "00:00", endTime: "23:59" }],
+        overrides: [{ date: TODAY_ET, closed: true, reason: "Company Retreat" }],
+        alwaysAvailable: false,
+        displayText: "Every day 12:00 AM - 11:59 PM ET",
+      },
+    },
+  },
+  {
+    name: "Request human — no hours configured",
+    message: "I need to talk to a human now.",
+    current_page_url: `${STORE_DOMAIN}/`,
+    judgePrompt: "No support hours are configured. There should be NO support_unavailable event. The assistant should acknowledge the handoff request without restrictions.",
+    expectToolCall: false,
+    maxChars: 600,
+    requestHuman: true,
+    setupHours: { text: "", schedule: null },
+  },
+  {
+    name: "Request human — holiday override custom hours",
+    message: "Please transfer me to human support.",
+    current_page_url: `${STORE_DOMAIN}/`,
+    judgePrompt: `Normal schedule is open all day, but today (${TODAY_ET}) has an override limiting support to 3-4am with reason "Holiday half day". Verify support_unavailable appears with the reason.`,
+    expectToolCall: false,
+    maxChars: 600,
+    requestHuman: true,
+    setupHours: {
+      text: `Every day 12am-11:59pm ET, ${TODAY_ET} only 3am-4am (Holiday half day)`,
+      schedule: {
+        timezone: "America/New_York",
+        windows: [{ days: ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"], startTime: "00:00", endTime: "23:59" }],
+        overrides: [{ date: TODAY_ET, startTime: "03:00", endTime: "04:00", reason: "Holiday half day" }],
+        alwaysAvailable: false,
+        displayText: "Every day 12:00 AM - 11:59 PM ET (holiday overrides apply)",
+      },
+    },
+  },
 ];
 
 // ── SSE parser ──────────────────────────────────────────────────────
@@ -199,12 +383,14 @@ function parseSseEvents(text) {
 // ── Send a chat message and collect timing + response ───────────────
 async function sendChatMessage(testCase) {
   const conversationId = `test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const body = JSON.stringify({
+  const bodyObj = {
     message: testCase.message,
     conversation_id: conversationId,
     prompt_type: "standardAssistant",
     current_page_url: testCase.current_page_url,
-  });
+  };
+  if (testCase.requestHuman) bodyObj.request_human = true;
+  const body = JSON.stringify(bodyObj);
 
   const startTime = performance.now();
   let firstChunkTime = null;
@@ -213,6 +399,7 @@ async function sendChatMessage(testCase) {
   let events = [];
   let error = null;
   let messageIds = [];
+  let supportUnavailable = null;
 
   try {
     const controller = new AbortController();
@@ -281,6 +468,10 @@ async function sendChatMessage(testCase) {
         if (data.type === "error") {
           error = data.error || "Unknown error";
         }
+
+        if (data.type === "support_unavailable") {
+          supportUnavailable = data;
+        }
       }
     }
   } catch (err) {
@@ -304,6 +495,7 @@ async function sendChatMessage(testCase) {
     events,
     error,
     messageIds,
+    supportUnavailable,
   };
 }
 
@@ -390,6 +582,16 @@ async function main() {
     console.log(`  Message: "${tc.message}"`);
     console.log(`  Page: ${tc.current_page_url}`);
 
+    // Configure support hours in DB if test case requires it
+    if (tc.setupHours) {
+      try {
+        await configureSupportHours(tc.setupHours.text, tc.setupHours.schedule);
+        console.log(`  Setup: configured support hours → "${tc.setupHours.text || '(empty)'}"`);
+      } catch (err) {
+        console.log(`  Setup: FAILED to configure hours — ${err.message}`);
+      }
+    }
+
     const result = await sendChatMessage(tc);
 
     // Timing checks
@@ -404,6 +606,10 @@ async function main() {
     console.log(`  Total: ${formatMs(result.totalTime)}`);
     console.log(`  Response length: ${result.fullResponseText.length} chars (limit: ${charLimit}) ${concisePass ? "PASS" : "FAIL — TOO LONG"}`);
     console.log(`  Tool calls: ${result.toolCalls.length}`);
+
+    if (result.supportUnavailable) {
+      console.log(`  Support unavailable: displayText="${result.supportUnavailable.displayText || ''}" reason="${result.supportUnavailable.reason || ''}"`);
+    }
 
     if (hasError) {
       console.log(`  Error: ${result.error}`);
@@ -421,7 +627,12 @@ async function main() {
       const productCards = result.events
         .filter(e => e.type === "product_results" && e.products)
         .flatMap(e => e.products);
-      judgeResult = await judgeResponse(tc, result.fullResponseText, productCards);
+      // Include support_unavailable SSE event info so judge has full context
+      let responseForJudge = result.fullResponseText;
+      if (result.supportUnavailable) {
+        responseForJudge += `\n\n[System event: support_unavailable — displayText: "${result.supportUnavailable.displayText || ''}", reason: "${result.supportUnavailable.reason || ''}"]`;
+      }
+      judgeResult = await judgeResponse(tc, responseForJudge, productCards);
       console.log(`${statusIcon(judgeResult.pass)} - ${judgeResult.reason}`);
     }
 
@@ -699,11 +910,18 @@ async function main() {
   console.log(`Average total response time: ${formatMs(avgTotal)}`);
   console.log();
 
+  // Clean up: reset support hours and disconnect Prisma
+  try {
+    await resetSupportHours();
+    await prisma.$disconnect();
+  } catch { /* ignore cleanup errors */ }
+
   // Exit code
   process.exit(failCount > 0 ? 1 : 0);
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   console.error("Fatal error:", err);
+  try { await prisma.$disconnect(); } catch {}
   process.exit(2);
 });
