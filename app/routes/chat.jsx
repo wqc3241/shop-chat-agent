@@ -260,6 +260,12 @@ async function handleActivityRequest(request, url, deps) {
   const { upsertCustomerActivity } = deps;
   try {
     const conversationId = url.searchParams.get('conversation_id');
+    // Heartbeat: just touch updatedAt, no data needed
+    if (url.searchParams.get('heartbeat') === 'true') {
+      await upsertCustomerActivity(conversationId, {});
+      return new Response(null, { status: 204, headers: getCorsHeaders(request) });
+    }
+
     const data = {};
     const keys = ['currentPageUrl', 'currentPageTitle', 'viewingProduct', 'cartContents'];
 

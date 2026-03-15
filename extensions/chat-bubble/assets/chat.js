@@ -1018,6 +1018,7 @@
       intercepted: false,
 
       start: function() {
+        this.stop();
         // Send page activity immediately (current page, product info)
         this.sendPageActivity();
         // Fetch cart once on start
@@ -1027,10 +1028,17 @@
           this.interceptCartMutations();
           this.intercepted = true;
         }
+        // Lightweight heartbeat every 15s so merchant knows customer is online
+        this.heartbeatTimer = setInterval(function() {
+          var convId = localStorage.getItem('shopAiConversationId');
+          if (!convId) return;
+          var params = new URLSearchParams({ activity: 'true', conversation_id: convId, heartbeat: 'true' });
+          fetch('/apps/chat-agent/chat?' + params.toString(), { method: 'GET', mode: 'cors' }).catch(function() {});
+        }, 15000);
       },
 
       stop: function() {
-        // No timers to clear — event-driven
+        if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null; }
       },
 
       /**

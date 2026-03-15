@@ -629,10 +629,25 @@ export default function LiveChat() {
               <div>
                 <div style={{ fontSize: "15px", fontWeight: 700, color: "#0f172a" }}>Customer Details</div>
                 <div style={{ display: "flex", alignItems: "center", gap: "12px", marginTop: "16px" }}>
-                  {renderIconBubble(getInitials(selectedConv))}
+                  <div style={{ position: "relative" }}>
+                    {renderIconBubble(getInitials(selectedConv))}
+                    {(() => {
+                      const isOnline = customerActivity?.updatedAt && (Date.now() - new Date(customerActivity.updatedAt).getTime()) < 30000;
+                      return (
+                        <div style={{
+                          position: "absolute", bottom: 0, right: 0,
+                          width: "12px", height: "12px", borderRadius: "50%",
+                          backgroundColor: isOnline ? "#22c55e" : "#94a3b8",
+                          border: "2px solid #ffffff",
+                        }} title={isOnline ? "Online" : "Offline"} />
+                      );
+                    })()}
+                  </div>
                   <div>
                     <div style={{ fontSize: "15px", fontWeight: 600, color: "#0f172a" }}>{getDisplayName(selectedConv)}</div>
-                    <div style={{ fontSize: "14px", color: "#64748b" }}>{selectedStatus.label}</div>
+                    <div style={{ fontSize: "14px", color: customerActivity?.updatedAt && (Date.now() - new Date(customerActivity.updatedAt).getTime()) < 30000 ? "#22c55e" : "#64748b" }}>
+                      {customerActivity?.updatedAt && (Date.now() - new Date(customerActivity.updatedAt).getTime()) < 30000 ? "Online" : selectedStatus.label}
+                    </div>
                   </div>
                 </div>
               </div>
