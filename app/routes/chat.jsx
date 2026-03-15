@@ -3,19 +3,108 @@
  * Handles chat interactions with OpenAI API and tools
  */
 import MCPClient from "../mcp-client";
-import { saveMessage, getConversationHistory, storeCustomerAccountUrls, getCustomerAccountUrls as getCustomerAccountUrlsFromDb, updateConversationMeta, updateConversationOrders, getChatSettings, getConversation, getMessagesSince, updateConversation, updateMessageFeedback, upsertCustomerActivity, getCustomerActivity } from "../db.server";
-import AppConfig from "../services/config.server";
-import { createSseStream } from "../services/streaming.server";
-import { createOpenAIService } from "../services/openai.server";
-import { createToolService } from "../services/tool.server";
-import { getWebSearchTool, executeWebSearch } from "../services/websearch.server";
-import { cacheGet, cacheSet, CACHE_KEYS, CACHE_TTL } from "../services/cache.server";
 
+// Lazy server-module loader — called at the top of loader/action so React Router
+// can strip these server-only imports from the client bundle.
+async function loadServerModules() {
+  const [
+    db,
+    { default: AppConfig },
+    { createSseStream },
+    { createOpenAIService },
+    { createToolService },
+    { getWebSearchTool, executeWebSearch },
+    { cacheGet, cacheSet, CACHE_KEYS, CACHE_TTL },
+  ] = await Promise.all([
+    import("../db.server"),
+    import("../services/config.server"),
+    import("../services/streaming.server"),
+    import("../services/openai.server"),
+    import("../services/tool.server"),
+    import("../services/websearch.server"),
+    import("../services/cache.server"),
+  ]);
+  return {
+    saveMessage: db.saveMessage,
+    getConversationHistory: db.getConversationHistory,
+    storeCustomerAccountUrls: db.storeCustomerAccountUrls,
+    getCustomerAccountUrlsFromDb: db.getCustomerAccountUrls,
+    updateConversationMeta: db.updateConversationMeta,
+    updateConversationOrders: db.updateConversationOrders,
+    getChatSettings: db.getChatSettings,
+    getConversation: db.getConversation,
+    getMessagesSince: db.getMessagesSince,
+    updateConversation: db.updateConversation,
+    updateMessageFeedback: db.updateMessageFeedback,
+    upsertCustomerActivity: db.upsertCustomerActivity,
+    getCustomerActivity: db.getCustomerActivity,
+    AppConfig,
+    createSseStream,
+    createOpenAIService,
+    createToolService,
+    getWebSearchTool,
+    executeWebSearch,
+    cacheGet,
+    cacheSet,
+    CACHE_KEYS,
+    CACHE_TTL,
+  };
+}
 
 /**
  * Rract Router loader function for handling GET requests
  */
 export async function loader({ request }) {
+  const {
+    saveMessage,
+    getConversationHistory,
+    storeCustomerAccountUrls,
+    getCustomerAccountUrlsFromDb,
+    updateConversationMeta,
+    updateConversationOrders,
+    getChatSettings,
+    getConversation,
+    getMessagesSince,
+    updateConversation,
+    updateMessageFeedback,
+    upsertCustomerActivity,
+    AppConfig,
+    createSseStream,
+    createOpenAIService,
+    createToolService,
+    getWebSearchTool,
+    executeWebSearch,
+    cacheGet,
+    cacheSet,
+    CACHE_KEYS,
+    CACHE_TTL,
+  } = await loadServerModules();
+
+  const deps = {
+    saveMessage,
+    getConversationHistory,
+    storeCustomerAccountUrls,
+    getCustomerAccountUrlsFromDb,
+    updateConversationMeta,
+    updateConversationOrders,
+    getChatSettings,
+    getConversation,
+    getMessagesSince,
+    updateConversation,
+    updateMessageFeedback,
+    upsertCustomerActivity,
+    AppConfig,
+    createSseStream,
+    createOpenAIService,
+    createToolService,
+    getWebSearchTool,
+    executeWebSearch,
+    cacheGet,
+    cacheSet,
+    CACHE_KEYS,
+    CACHE_TTL,
+  };
+
   // Handle OPTIONS requests (CORS preflight)
   if (request.method === "OPTIONS") {
     return new Response(null, {
@@ -28,27 +117,27 @@ export async function loader({ request }) {
 
   // Handle message feedback
   if (url.searchParams.has('feedback') && url.searchParams.has('message_id')) {
-    return handleFeedbackRequest(request, url);
+    return handleFeedbackRequest(request, url, deps);
   }
 
   // Handle customer activity updates
   if (url.searchParams.has('activity') && url.searchParams.has('conversation_id')) {
-    return handleActivityRequest(request, url);
+    return handleActivityRequest(request, url, deps);
   }
 
   // Handle storefront polling for merchant messages
   if (url.searchParams.has('poll') && url.searchParams.has('conversation_id')) {
-    return handlePollRequest(request, url);
+    return handlePollRequest(request, url, deps);
   }
 
   // Handle history fetch requests - matches /chat?history=true&conversation_id=XYZ
   if (url.searchParams.has('history') && url.searchParams.has('conversation_id')) {
-    return handleHistoryRequest(request, url.searchParams.get('conversation_id'));
+    return handleHistoryRequest(request, url.searchParams.get('conversation_id'), deps);
   }
 
   // Handle SSE requests
   if (!url.searchParams.has('history') && request.headers.get("Accept") === "text/event-stream") {
-    return handleChatRequest(request);
+    return handleChatRequest(request, deps);
   }
 
   // API-only: reject all other requests
@@ -59,16 +148,19 @@ export async function loader({ request }) {
  * React Router action function for handling POST requests
  */
 export async function action({ request }) {
-  return handleChatRequest(request);
+  const deps = await loadServerModules();
+  return handleChatRequest(request, deps);
 }
 
 /**
  * Handle history fetch requests
  * @param {Request} request - The request object
  * @param {string} conversationId - The conversation ID
+ * @param {Object} deps - Server module dependencies
  * @returns {Response} JSON response with chat history
  */
-async function handleHistoryRequest(request, conversationId) {
+async function handleHistoryRequest(request, conversationId, deps) {
+  const { getConversationHistory, getConversation } = deps;
   const [messages, conversation] = await Promise.all([
     getConversationHistory(conversationId),
     getConversation(conversationId),
@@ -84,9 +176,11 @@ async function handleHistoryRequest(request, conversationId) {
  * Handle storefront polling for new merchant messages
  * @param {Request} request - The request object
  * @param {URL} url - Parsed URL
+ * @param {Object} deps - Server module dependencies
  * @returns {Response} JSON response with new messages and mode
  */
-async function handlePollRequest(request, url) {
+async function handlePollRequest(request, url, deps) {
+  const { getConversation, getMessagesSince } = deps;
   const conversationId = url.searchParams.get('conversation_id');
   const since = url.searchParams.get('since');
 
@@ -109,7 +203,8 @@ async function handlePollRequest(request, url) {
 /**
  * Handle message feedback (thumbs up/down)
  */
-async function handleFeedbackRequest(request, url) {
+async function handleFeedbackRequest(request, url, deps) {
+  const { updateMessageFeedback } = deps;
   try {
     const messageId = url.searchParams.get('message_id');
     const feedback = url.searchParams.get('value'); // "good" | "bad"
@@ -133,7 +228,8 @@ async function handleFeedbackRequest(request, url) {
 /**
  * Handle customer activity updates from storefront
  */
-async function handleActivityRequest(request, url) {
+async function handleActivityRequest(request, url, deps) {
+  const { upsertCustomerActivity } = deps;
   try {
     const conversationId = url.searchParams.get('conversation_id');
     const data = {};
@@ -151,9 +247,11 @@ async function handleActivityRequest(request, url) {
 /**
  * Handle chat requests (both GET and POST)
  * @param {Request} request - The request object
+ * @param {Object} deps - Server module dependencies
  * @returns {Response} Server-sent events stream
  */
-async function handleChatRequest(request) {
+async function handleChatRequest(request, deps) {
+  const { AppConfig, createSseStream } = deps;
   try {
     // Parse request body — handle both JSON and form-encoded (Shopify app proxy
     // converts application/json to application/x-www-form-urlencoded)
@@ -200,6 +298,7 @@ async function handleChatRequest(request) {
         stream,
         requestHuman,
         expectedMode,
+        deps,
       });
     });
 
@@ -224,6 +323,7 @@ async function handleChatRequest(request) {
  * @param {string} params.promptType - The prompt type
  * @param {string} params.currentPageUrl - The current page URL
  * @param {Object} params.stream - Stream manager for sending responses
+ * @param {Object} params.deps - Server module dependencies
  */
 async function handleChatSession({
   request,
@@ -234,7 +334,28 @@ async function handleChatSession({
   stream,
   requestHuman,
   expectedMode,
+  deps,
 }) {
+  const {
+    saveMessage,
+    getConversationHistory,
+    storeCustomerAccountUrls,
+    getCustomerAccountUrlsFromDb,
+    updateConversationMeta,
+    updateConversationOrders,
+    getChatSettings,
+    getConversation,
+    updateConversation,
+    AppConfig,
+    createOpenAIService,
+    createToolService,
+    getWebSearchTool,
+    executeWebSearch,
+    cacheGet,
+    cacheSet,
+    CACHE_KEYS,
+    CACHE_TTL,
+  } = deps;
   const openaiService = createOpenAIService();
 
   // Initialize MCP client
@@ -290,7 +411,7 @@ async function handleChatSession({
     }
 
     const [customerUrlsResult, storefrontResult, dbMessagesResult, chatSettingsResult] = await Promise.allSettled([
-      getCustomerAccountUrls(shopDomain, conversationId),
+      getCustomerAccountUrls(shopDomain, conversationId, deps),
       withTimeout(mcpClient.connectToStorefrontServer(), AppConfig.timeouts.storefrontMcpMs, 'storefront MCP connection timed out'),
       getConversationHistory(conversationId),
       // Fetch merchant's custom instructions
@@ -854,9 +975,11 @@ async function handleChatSession({
  * Get the customer MCP API URL for a shop
  * @param {string} shopDomain - The shop domain
  * @param {string} conversationId - The conversation ID
+ * @param {Object} deps - Server module dependencies
  * @returns {string} The customer MCP API URL
  */
-async function getCustomerAccountUrls(shopDomain, conversationId) {
+async function getCustomerAccountUrls(shopDomain, conversationId, deps) {
+  const { storeCustomerAccountUrls, getCustomerAccountUrlsFromDb, cacheGet, cacheSet, CACHE_KEYS, CACHE_TTL } = deps;
   try {
     // Layer 1: In-memory cache keyed by shop domain (instant)
     const cacheKey = CACHE_KEYS.customerAccountUrls(shopDomain);

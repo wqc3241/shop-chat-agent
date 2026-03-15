@@ -5,7 +5,7 @@ import { getChatSettings, saveChatSettings } from "../db.server";
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const settings = await getChatSettings(session.shop);
-  return { settings, shop: session.shop };
+  return { settings };
 };
 
 export const action = async ({ request }) => {
@@ -34,8 +34,7 @@ export const action = async ({ request }) => {
 };
 
 export default function Settings() {
-  const { settings, shop } = useLoaderData();
-  const storeHandle = shop.replace(".myshopify.com", "");
+  const { settings } = useLoaderData();
   const actionData = useActionData();
   const navigation = useNavigation();
   const isSubmitting = navigation.state === "submitting";

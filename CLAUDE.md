@@ -51,7 +51,7 @@ The dev server port is dynamic (assigned by Vite at startup �?check terminal o
 
 ## Database
 
-SQLite via Prisma. Schema at `prisma/schema.prisma`. Models: Session, CustomerToken, CodeVerifier, Conversation, Message, CustomerAccountUrls, ChatSettings, CustomerActivity.
+PostgreSQL via Prisma. Schema at `prisma/schema.prisma`. Models: Session, CustomerToken, CodeVerifier, Conversation, Message, CustomerAccountUrls, ChatSettings, CustomerActivity. Requires `DATABASE_URL` env var.
 
 ```bash
 npx prisma generate          # Regenerate client after schema changes
@@ -67,12 +67,34 @@ Required in `.env`:
 
 ## Shopify App Config
 
-- `shopify.app.ai-chatbot.toml` �?**Active config** (has the real `client_id` and `[app_proxy]` section). The default `shopify.app.toml` is a template with placeholder `client_id`.
-- The app proxy config (`[app_proxy]` in `shopify.app.ai-chatbot.toml`) has `automatically_update_urls_on_dev = true`, so `shopify app dev` updates the proxy URL to the current Cloudflare tunnel.
-- Access scopes: `customer_read_customers`, `customer_read_orders`, `customer_read_store_credit_account_transactions`, `customer_read_store_credit_accounts`, `unauthenticated_read_product_listings`
+- `shopify.app.shop-chat-agent.toml` — **Active config** (client_id `4c027b857aefc723b419e183d880dbef`, under org 129937154).
+- The app proxy config (`[app_proxy]`) has `automatically_update_urls_on_dev = true`, so `shopify app dev` updates the proxy URL to the current Cloudflare tunnel.
+- Access scopes: `customer_read_customers`, `customer_read_orders`, `customer_read_store_credit_account_transactions`, `customer_read_store_credit_accounts`, `unauthenticated_read_product_listings`, `read_products`
 - The app is embedded (`embedded = true`).
-- Workspaces: `extensions/*` (monorepo �?extensions are npm workspaces).
-- Dev store: `dev-nlp-brochure.myshopify.com` (stored in `.shopify/project.json`).
+- Workspaces: `extensions/*` (monorepo — extensions are npm workspaces).
+- Dev store: `dev-nlp-brochure-2.myshopify.com` (Partners-managed under org 129937154).
+- GDPR webhooks use `compliance_topics` (not `topics`) in the toml — Shopify CLI rejects `topics` for compliance webhooks.
+
+## Production Deployment
+
+Hosted on Fly.io:
+- **App**: `nlp-shop-chat-agent` at `https://nlp-shop-chat-agent.fly.dev`
+- **Database**: `nlp-shop-chat-agent-db` (Fly Postgres 17, region `iad`)
+- **Dockerfile**: `node:20-alpine`, uses `npm ci --omit=dev --legacy-peer-deps` (peer dep conflicts between Shopify packages)
+- **Startup**: `npm run docker-start` runs `prisma generate && prisma migrate deploy && react-router-serve`
+- **Health check**: `GET /health` returns `{"status":"ok"}`
+- **Privacy policy**: `GET /privacy` serves GDPR-compliant privacy page
+- **fly.toml**: Sets `HOST=0.0.0.0` (required for react-router-serve to bind correctly in container)
+- **DB auto-stop disabled**: DB machine configured with `--autostop=off --restart=always` to prevent Fly from stopping it
+- **Secrets**: `DATABASE_URL`, `OPENAI_API_KEY`, `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET`, `SHOPIFY_APP_URL`
+- **Deploy**: `fly deploy --app nlp-shop-chat-agent` (requires flyctl, installed at `~/.fly/bin/flyctl`)
+
+### Shopify Org/Store Hierarchy
+
+The app went through multiple org migrations. Key lesson:
+- Apps created under a **standalone dev store** (not linked to Partners) are invisible in the Partners Dashboard and can only be installed on that one store.
+- Apps created via `shopify app config link` under a **Partners org** are visible in the dev dashboard and can be installed on any store in that org.
+- Current app is under org **129937154** ("Next Level Performance") in the dev dashboard at `dev.shopify.com/dashboard/129937154/apps`.
 
 ## Theme Extension
 

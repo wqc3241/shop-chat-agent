@@ -604,3 +604,125 @@ export async function getDashboardMetrics(shop) {
     return { total: 0, today: 0, withOrders: 0 };
   }
 }
+
+// ── GDPR data access & redaction ─────────────────────────────────────
+
+/**
+ * Get all stored data for a customer (for CUSTOMERS_DATA_REQUEST webhook)
+ * @param {string} shop - The shop domain
+ * @param {string} customerEmail - The customer's email
+ * @returns {Promise<Object>} All customer data
+ */
+export async function getCustomerData(shop, customerEmail) {
+  const conversations = await prisma.conversation.findMany({
+    where: { shop, customerEmail },
+    include: {
+      messages: { orderBy: { createdAt: 'asc' } },
+    },
+  });
+
+  const conversationIds = conversations.map(c => c.id);
+
+  const [tokens, activity] = await Promise.all([
+    prisma.customerToken.findMany({
+      where: { conversationId: { in: conversationIds } },
+    }),
+    prisma.customerActivity.findMany({
+      where: { conversationId: { in: conversationIds } },
+    }),
+  ]);
+
+  return { conversations, tokens, activity };
+}
+
+/**
+ * Delete all data for a customer (for CUSTOMERS_REDACT webhook)
+ * @param {string} shop - The shop domain
+ * @param {string} customerEmail - The customer's email
+ */
+export async function redactCustomerData(shop, customerEmail) {
+  const conversations = await prisma.conversation.findMany({
+    where: { shop, customerEmail },
+    select: { id: true },
+  });
+
+  const conversationIds = conversations.map(c => c.id);
+
+  if (conversationIds.length === 0) return;
+
+  await prisma.$transaction([
+    prisma.customerActivity.deleteMany({ where: { conversationId: { in: conversationIds } } }),
+    prisma.customerToken.deleteMany({ where: { conversationId: { in: conversationIds } } }),
+    prisma.customerAccountUrls.deleteMany({ where: { conversationId: { in: conversationIds } } }),
+    prisma.message.deleteMany({ where: { conversationId: { in: conversationIds } } }),
+    prisma.conversation.deleteMany({ where: { id: { in: conversationIds } } }),
+  ]);
+}
+
+/**
+ * Delete ALL data for a shop (for SHOP_REDACT webhook)
+ * @param {string} shop - The shop domain
+ */
+export async function redactShopData(shop) {
+  const conversations = await prisma.conversation.findMany({
+    where: { shop },
+    select: { id: true },
+  });
+
+  const conversationIds = conversations.map(c => c.id);
+
+  await prisma.$transaction([
+    // Delete conversation-linked data
+    ...(conversationIds.length > 0 ? [
+      prisma.customerActivity.deleteMany({ where: { conversationId: { in: conversationIds } } }),
+      prisma.customerToken.deleteMany({ where: { conversationId: { in: conversationIds } } }),
+      prisma.customerAccountUrls.deleteMany({ where: { conversationId: { in: conversationIds } } }),
+      prisma.message.deleteMany({ where: { conversationId: { in: conversationIds } } }),
+      prisma.conversation.deleteMany({ where: { shop } }),
+    ] : []),
+    // Delete shop-level data
+    prisma.chatSettings.deleteMany({ where: { shop } }),
+    prisma.session.deleteMany({ where: { shop } }),
+  ]);
+}
+
+// ── Data retention & cleanup ─────────────────────────────────────────
+
+/**
+ * Delete old data past retention period
+ * @param {number} retentionDays - Days to retain (default 90)
+ */
+export async function cleanupOldData(retentionDays = 90) {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - retentionDays);
+
+  // Find old conversations
+  const oldConversations = await prisma.conversation.findMany({
+    where: { updatedAt: { lt: cutoff } },
+    select: { id: true },
+  });
+
+  const conversationIds = oldConversations.map(c => c.id);
+
+  if (conversationIds.length > 0) {
+    await prisma.$transaction([
+      prisma.customerActivity.deleteMany({ where: { conversationId: { in: conversationIds } } }),
+      prisma.customerToken.deleteMany({ where: { conversationId: { in: conversationIds } } }),
+      prisma.customerAccountUrls.deleteMany({ where: { conversationId: { in: conversationIds } } }),
+      prisma.message.deleteMany({ where: { conversationId: { in: conversationIds } } }),
+      prisma.conversation.deleteMany({ where: { id: { in: conversationIds } } }),
+    ]);
+  }
+
+  // Delete expired code verifiers
+  await prisma.codeVerifier.deleteMany({
+    where: { expiresAt: { lt: new Date() } },
+  });
+
+  // Delete expired customer tokens
+  await prisma.customerToken.deleteMany({
+    where: { expiresAt: { lt: new Date() } },
+  });
+
+  return { deletedConversations: conversationIds.length };
+}
