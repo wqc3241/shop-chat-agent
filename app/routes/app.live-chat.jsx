@@ -769,9 +769,15 @@ export default function LiveChat() {
                   {customerActivity.currentPageUrl && (
                     <div style={{ marginBottom: "10px" }}>
                       <div style={{ fontSize: "12px", fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.5px" }}>Browsing</div>
-                      <div style={{ fontSize: "13px", color: "#0f172a", marginTop: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={customerActivity.currentPageUrl}>
+                      <a
+                        href={customerActivity.currentPageUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ fontSize: "13px", color: "#2563eb", textDecoration: "none", marginTop: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}
+                        title={customerActivity.currentPageUrl}
+                      >
                         {customerActivity.currentPageTitle || customerActivity.currentPageUrl}
-                      </div>
+                      </a>
                     </div>
                   )}
 
@@ -786,7 +792,11 @@ export default function LiveChat() {
                           <div style={{ display: "flex", gap: "8px", marginTop: "4px", alignItems: "center" }}>
                             {p.image && <img src={p.image} alt="" style={{ width: "36px", height: "36px", borderRadius: "6px", objectFit: "cover" }} />}
                             <div style={{ minWidth: 0 }}>
-                              <div style={{ fontSize: "13px", fontWeight: 500, color: "#0f172a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</div>
+                              {p.url ? (
+                                <a href={p.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: "13px", fontWeight: 500, color: "#2563eb", textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{p.title}</a>
+                              ) : (
+                                <div style={{ fontSize: "13px", fontWeight: 500, color: "#0f172a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</div>
+                              )}
                               {p.price && <div style={{ fontSize: "12px", color: "#5046e4", fontWeight: 600 }}>${p.price}</div>}
                             </div>
                           </div>
@@ -808,7 +818,18 @@ export default function LiveChat() {
                           <div style={{ marginTop: "4px", display: "flex", flexDirection: "column", gap: "4px" }}>
                             {items.slice(0, 5).map((item, i) => (
                               <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: "13px", color: "#334155" }}>
-                                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>{item.title}</span>
+                                {item.url ? (
+                                  <a
+                                    href={`https://${selectedConv.shop}${item.url}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0, color: "#2563eb", textDecoration: "none" }}
+                                  >
+                                    {item.title}
+                                  </a>
+                                ) : (
+                                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>{item.title}</span>
+                                )}
                                 <span style={{ flexShrink: 0, marginLeft: "8px", color: "#64748b" }}>x{item.quantity} ${item.price}</span>
                               </div>
                             ))}

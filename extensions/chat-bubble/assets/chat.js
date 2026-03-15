@@ -1065,6 +1065,7 @@
                 quantity: item.quantity,
                 price: (item.price / 100).toFixed(2),
                 variantTitle: item.variant_title,
+                url: item.url || '',
               };
             }));
             var payload = {
