@@ -520,8 +520,26 @@
         // Convert text to HTML with proper list handling
         processedText = this.convertMarkdownToHtml(processedText);
 
+        // Preserve feedback buttons and timestamp before replacing innerHTML
+        var feedbackEl = element.querySelector('.shop-ai-feedback');
+        var timeEl = element.querySelector('.shop-ai-message-time');
+        if (feedbackEl) feedbackEl = feedbackEl.cloneNode(true);
+        if (timeEl) timeEl = timeEl.cloneNode(true);
+
         // Apply the formatted HTML
         element.innerHTML = processedText;
+
+        // Re-attach preserved elements
+        if (timeEl) element.appendChild(timeEl);
+        if (feedbackEl) {
+          element.appendChild(feedbackEl);
+          // Re-bind click handlers on cloned buttons
+          feedbackEl.querySelectorAll('.shop-ai-feedback-btn').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+              ShopAIChat.Feedback.submit(element, btn.dataset.value);
+            });
+          });
+        }
       },
 
       /**
@@ -711,6 +729,11 @@
               currentMessageElement.classList.add('shop-ai-message', 'assistant');
               currentMessageElement.textContent = '';
               currentMessageElement.dataset.rawText = '';
+              // Add timestamp
+              var tsEl = document.createElement('div');
+              tsEl.className = 'shop-ai-message-time';
+              tsEl.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+              currentMessageElement.appendChild(tsEl);
               messagesContainer.appendChild(currentMessageElement);
               updateCurrentElement(currentMessageElement);
             }
