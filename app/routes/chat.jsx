@@ -726,15 +726,11 @@ async function handleChatSession({
       return;
     }
 
-    // Extract merchant's knowledge fields and combine into structured instructions
+    // Extract merchant's custom instructions (policies now come from Shopify MCP tool)
     const chatSettings = chatSettingsResult?.status === 'fulfilled'
       ? chatSettingsResult.value || {}
       : {};
-    const knowledgeSections = [];
-    if (chatSettings.returnPolicy) knowledgeSections.push(`[RETURN POLICY]\n${chatSettings.returnPolicy}`);
-    if (chatSettings.contactInfo) knowledgeSections.push(`[CONTACT INFO]\n${chatSettings.contactInfo}`);
-    if (chatSettings.customInstructions) knowledgeSections.push(`[OTHER]\n${chatSettings.customInstructions}`);
-    const customInstructions = knowledgeSections.join('\n\n');
+    const customInstructions = chatSettings.customInstructions || '';
 
     // Execute the conversation stream
     let finalMessage = { role: 'user', content: userMessage };

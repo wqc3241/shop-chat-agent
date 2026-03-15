@@ -16,8 +16,6 @@ export const action = async ({ request }) => {
     welcomeMessage: formData.get("welcomeMessage") || "",
     promptType: formData.get("promptType") || "standardAssistant",
     customInstructions: formData.get("customInstructions") || "",
-    returnPolicy: formData.get("returnPolicy") || "",
-    contactInfo: formData.get("contactInfo") || "",
     bubbleColor: formData.get("bubbleColor") || "#5046e4",
     supportHoursStart: formData.get("supportHoursStart") || "",
     supportHoursEnd: formData.get("supportHoursEnd") || "",
@@ -115,28 +113,16 @@ export default function Settings() {
               <s-stack gap="base">
                 <s-heading element="h2">Store Knowledge</s-heading>
 
-                <s-text-area
-                  label="Return Policy"
-                  name="returnPolicy"
-                  defaultValue={settings?.returnPolicy || ""}
-                  rows="4"
-                  helpText="Your return, exchange, and refund policy details."
-                />
+                <s-banner tone="info">
+                  Store policies (return policy, shipping, terms of service, contact info) are automatically synced from your Shopify admin &rarr; Settings &rarr; Policies. No need to enter them here.
+                </s-banner>
 
                 <s-text-area
-                  label="Contact Information"
-                  name="contactInfo"
-                  defaultValue={settings?.contactInfo || ""}
-                  rows="3"
-                  helpText="Phone, email, hours, address — anything customers ask about."
-                />
-
-                <s-text-area
-                  label="Other Knowledge"
+                  label="Custom Instructions"
                   name="customInstructions"
                   defaultValue={settings?.customInstructions || ""}
                   rows="4"
-                  helpText="Brand voice, promotions, warranty, anything else the AI should know."
+                  helpText="Brand voice, promotions, warranty, or anything else the AI should know beyond your store policies."
                 />
               </s-stack>
             </s-box>
