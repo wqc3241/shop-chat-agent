@@ -72,8 +72,8 @@
     .shop-ai-chat-window {
       position: fixed;
       width: 100vw;
-      height: 66vh;
-      height: calc(var(--viewport-height, 100vh) * 0.66);
+      height: 75vh;
+      height: calc(var(--viewport-height, 100vh) * 0.75);
       top: auto;
       left: 0;
       right: 0;
