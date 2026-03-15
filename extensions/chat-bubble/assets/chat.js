@@ -756,6 +756,8 @@
             // Associate the message ID with the current assistant element for feedback
             if (currentMessageElement && data.message_id) {
               currentMessageElement.dataset.messageId = data.message_id;
+              // Add feedback buttons (message_id may arrive after message_complete)
+              ShopAIChat.Feedback.addButtons(currentMessageElement);
             }
             break;
 
