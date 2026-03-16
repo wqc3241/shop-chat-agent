@@ -6,7 +6,7 @@ application_url = "https://nlp-shop-chat-agent.fly.dev"
 embedded = true
 
 [webhooks]
-api_version = "2026-04"
+api_version = "2025-10"
 
   [[webhooks.subscriptions]]
   compliance_topics = ["customers/data_request", "customers/redact", "shop/redact"]
