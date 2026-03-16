@@ -1,37 +1,41 @@
 #!/usr/bin/env node
 /**
  * Generate 1200x1200 app icon for Shopify App Store
- * A chat bubble with a small shopping bag inside — clean, modern, simple.
+ *
+ * Shopify icon guidelines:
+ *   - 1200x1200 PNG, no rounded corners (Shopify rounds automatically)
+ *   - Icon element fills 10/16 to 12/16 of the canvas (750px–900px)
+ *   - 1/16 margin (75px) around edges minimum
+ *   - Bold colors, simple, recognizable at small sizes
+ *   - No text, no Shopify trademarks
+ *
+ * Design: Chat bubble with centered shopping bag — "shop chat agent"
  */
 import sharp from 'sharp';
 
 const SIZE = 1200;
+const C = SIZE / 2; // center = 600
 
-// Colors
-const BG_COLOR = '#5046e4'; // Matches the app's default bubble color
-const ICON_COLOR = '#ffffff';
+const BG = '#5046e4';
+const WHITE = '#ffffff';
 
 const svg = `
 <svg width="${SIZE}" height="${SIZE}" viewBox="0 0 ${SIZE} ${SIZE}" xmlns="http://www.w3.org/2000/svg">
-  <!-- Background -->
-  <rect width="${SIZE}" height="${SIZE}" fill="${BG_COLOR}" />
+  <rect width="${SIZE}" height="${SIZE}" fill="${BG}" />
 
-  <!-- Chat bubble -->
-  <g transform="translate(${SIZE / 2}, ${SIZE * 0.42})">
-    <!-- Main bubble shape -->
-    <rect x="-340" y="-260" width="680" height="460" rx="80" ry="80" fill="${ICON_COLOR}" />
-    <!-- Tail -->
-    <polygon points="-160,200 -80,200 -200,320" fill="${ICON_COLOR}" />
-  </g>
+  <!-- Chat bubble: centered in canvas, fills ~11/16 -->
+  <!-- Bubble body -->
+  <rect x="260" y="195" width="680" height="520" rx="80" ry="80" fill="${WHITE}" />
+  <!-- Bubble tail — bottom-left -->
+  <polygon points="340,715 440,715 280,870" fill="${WHITE}" />
 
-  <!-- Shopping bag icon inside the bubble -->
-  <g transform="translate(${SIZE / 2}, ${SIZE * 0.40})" fill="none" stroke="${BG_COLOR}" stroke-width="28" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Shopping bag — centered inside the bubble body -->
+  <!-- Bubble center is at (600, 455). Bag is drawn centered there. -->
+  <g transform="translate(600, 435)" fill="none" stroke="${BG}" stroke-width="36" stroke-linecap="round" stroke-linejoin="round">
     <!-- Bag body -->
-    <path d="M-100,20 L-120,160 C-122,178 -108,194 -90,194 L90,194 C108,194 122,178 120,160 L100,20 Z" />
+    <rect x="-135" y="-30" width="270" height="240" rx="20" ry="20" />
     <!-- Bag handles -->
-    <path d="M-60,20 C-60,-60 60,-60 60,20" />
-    <!-- Bag top opening -->
-    <line x1="-100" y1="20" x2="100" y2="20" />
+    <path d="M-70,-30 C-70,-130 70,-130 70,-30" />
   </g>
 </svg>
 `;
