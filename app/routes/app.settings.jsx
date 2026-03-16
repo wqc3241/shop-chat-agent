@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useLoaderData, useActionData, useNavigation, Form } from "react-router";
 import { authenticate } from "../shopify.server";
-import { getChatSettings, saveChatSettings } from "../db.server";
+import { getChatSettings, saveChatSettings, getAiConvoUsage } from "../db.server";
 import { parseSupportSchedule } from "../services/schedule-parser.server";
 
 async function fetchStorePolicies(admin) {
@@ -39,7 +39,8 @@ export const loader = async ({ request }) => {
   const { session, admin } = await authenticate.admin(request);
   const settings = await getChatSettings(session.shop);
   const policies = await fetchStorePolicies(admin);
-  return { settings, policies, syncedAt: new Date().toISOString() };
+  const usage = await getAiConvoUsage(session.shop);
+  return { settings, policies, syncedAt: new Date().toISOString(), usage };
 };
 
 export const action = async ({ request }) => {
@@ -84,7 +85,7 @@ export const action = async ({ request }) => {
 };
 
 export default function Settings() {
-  const { settings, policies: initialPolicies, syncedAt: initialSyncedAt } = useLoaderData();
+  const { settings, policies: initialPolicies, syncedAt: initialSyncedAt, usage } = useLoaderData();
   const actionData = useActionData();
   const navigation = useNavigation();
   const isSubmitting = navigation.state === "submitting";
@@ -130,6 +131,33 @@ export default function Settings() {
             </s-banner>
           </s-section>
         )}
+
+        {/* Plan summary */}
+        <s-section>
+          <s-card>
+            <s-box padding="base">
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                  <span style={{ fontSize: "14px", fontWeight: 600, color: "#374151" }}>Plan:</span>
+                  <span style={{
+                    display: "inline-block", padding: "2px 10px", borderRadius: "12px",
+                    fontSize: "13px", fontWeight: 600,
+                    backgroundColor: usage?.plan === "free" ? "#f1f5f9" : "#dbeafe",
+                    color: usage?.plan === "free" ? "#475569" : "#1d4ed8",
+                  }}>
+                    {usage?.plan ? usage.plan.charAt(0).toUpperCase() + usage.plan.slice(1) : "Free"}
+                  </span>
+                  <span style={{ fontSize: "13px", color: "#6b7280" }}>
+                    {usage?.count || 0} of {usage?.limit === Infinity ? "Unlimited" : (usage?.limit || 25)} AI conversations used
+                  </span>
+                </div>
+                <a href="/app/billing" style={{
+                  fontSize: "13px", color: "#3b82f6", textDecoration: "none", fontWeight: 600,
+                }}>Manage plan</a>
+              </div>
+            </s-box>
+          </s-card>
+        </s-section>
 
         {/* Chat Appearance */}
         <s-section>

@@ -16,6 +16,20 @@ const shopify = shopifyApp({
   authPathPrefix: "/auth",
   sessionStorage: new PrismaSessionStorage(prisma),
   distribution: AppDistribution.AppStore,
+  billing: {
+    Starter: {
+      amount: 19,
+      currencyCode: "USD",
+      interval: "Every30Days",
+      trialDays: 14,
+    },
+    Pro: {
+      amount: 49,
+      currencyCode: "USD",
+      interval: "Every30Days",
+      trialDays: 14,
+    },
+  },
   ...(process.env.SHOP_CUSTOM_DOMAIN
     ? { customShopDomains: [process.env.SHOP_CUSTOM_DOMAIN] }
     : {}),

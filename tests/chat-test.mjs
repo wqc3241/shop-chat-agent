@@ -19,7 +19,7 @@
 import { config } from "dotenv";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
-import { PrismaClient } from "@prisma/client";
+// PrismaClient no longer needed — support hours configured via HTTP API
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 config({ path: resolve(__dirname, "..", ".env") });
@@ -45,26 +45,43 @@ const STORE_DOMAIN = param("store-domain", "https://dev-nlp-brochure-2.myshopify
 const SHOP_HOSTNAME = new URL(STORE_DOMAIN).hostname;
 
 // ── Support hours test helpers ──────────────────────────────────────
-const prisma = new PrismaClient();
 const TODAY_ET = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
 
 async function configureSupportHours(supportHoursText, supportSchedule) {
-  await prisma.chatSettings.upsert({
-    where: { shop: SHOP_HOSTNAME },
-    update: {
-      supportHoursText: supportHoursText || '',
-      supportSchedule: supportSchedule ? JSON.stringify(supportSchedule) : '',
-    },
-    create: {
-      shop: SHOP_HOSTNAME,
-      supportHoursText: supportHoursText || '',
-      supportSchedule: supportSchedule ? JSON.stringify(supportSchedule) : '',
-    },
+  const params = new URLSearchParams({
+    test_setup: 'support_hours',
+    shop: SHOP_HOSTNAME,
+    support_hours_text: supportHoursText || '',
+    support_schedule: supportSchedule ? JSON.stringify(supportSchedule) : '',
   });
+  const resp = await fetch(`${BASE_URL}/chat?${params}`, {
+    headers: { Origin: STORE_DOMAIN },
+  });
+  if (!resp.ok) throw new Error(`Setup failed: HTTP ${resp.status}`);
 }
 
 async function resetSupportHours() {
   await configureSupportHours('', null);
+}
+
+// ── Billing test helpers ─────────────────────────────────────────────
+async function configureBilling({ plan = 'free', count = 0, resetAt = null, status = 'active' } = {}) {
+  const params = new URLSearchParams({
+    test_setup: 'billing',
+    shop: SHOP_HOSTNAME,
+    billing_plan: plan,
+    monthly_ai_convo_count: String(count),
+    billing_status: status,
+  });
+  if (resetAt) params.set('monthly_convo_reset_at', resetAt);
+  const resp = await fetch(`${BASE_URL}/chat?${params}`, {
+    headers: { Origin: STORE_DOMAIN },
+  });
+  if (!resp.ok) throw new Error(`Billing setup failed: HTTP ${resp.status}`);
+}
+
+async function resetBilling() {
+  await configureBilling({ plan: 'free', count: 0 });
 }
 
 // ── Test scenarios ──────────────────────────────────────────────────
@@ -400,6 +417,7 @@ async function sendChatMessage(testCase) {
   let error = null;
   let messageIds = [];
   let supportUnavailable = null;
+  let billingLimit = null;
 
   try {
     const controller = new AbortController();
@@ -472,6 +490,10 @@ async function sendChatMessage(testCase) {
         if (data.type === "support_unavailable") {
           supportUnavailable = data;
         }
+
+        if (data.type === "billing_limit") {
+          billingLimit = data;
+        }
       }
     }
   } catch (err) {
@@ -496,6 +518,7 @@ async function sendChatMessage(testCase) {
     error,
     messageIds,
     supportUnavailable,
+    billingLimit,
   };
 }
 
@@ -854,6 +877,117 @@ async function main() {
   }
   console.log();
 
+  // ── Billing Quota E2E Tests ─────────────────────────────────────
+  console.log("--- Billing Quota E2E Tests ---");
+  try {
+    // Test 1: Free tier limit reached → billing_limit event + pending_merchant mode
+    console.log("  [1/6] Free tier limit reached...");
+    await configureBilling({ plan: 'free', count: 25 }); // Free tier = 25 limit
+    const limitResult = await sendChatMessage({
+      name: "Billing limit",
+      message: "Hello, can you help me?",
+      current_page_url: `${STORE_DOMAIN}/`,
+    });
+    const gotBillingLimit = !!limitResult.billingLimit;
+    const gotPendingMode = limitResult.events.some(e => e.type === 'mode' && e.mode === 'pending_merchant');
+    const noAiResponse = limitResult.fullResponseText.length === 0;
+    console.log(`    billing_limit event: ${gotBillingLimit ? "PASS" : "FAIL"}`);
+    console.log(`    pending_merchant mode: ${gotPendingMode ? "PASS" : "FAIL"}`);
+    console.log(`    no AI response (no OpenAI cost): ${noAiResponse ? "PASS" : "FAIL"}`);
+
+    // Test 2: Free tier under limit → normal AI response (no billing_limit)
+    console.log("  [2/6] Free tier under limit...");
+    await configureBilling({ plan: 'free', count: 10 });
+    const underLimitResult = await sendChatMessage({
+      name: "Under limit",
+      message: "Hi there",
+      current_page_url: `${STORE_DOMAIN}/`,
+    });
+    const noBillingLimit = !underLimitResult.billingLimit;
+    const hasAiResponse = underLimitResult.fullResponseText.length > 0;
+    console.log(`    no billing_limit event: ${noBillingLimit ? "PASS" : "FAIL"}`);
+    console.log(`    AI responds normally: ${hasAiResponse ? "PASS" : "FAIL"}`);
+
+    // Test 3: Continuation doesn't count — send follow-up in same conversation
+    console.log("  [3/6] Continuation doesn't trigger billing limit...");
+    await configureBilling({ plan: 'free', count: 24 }); // 1 under limit
+    const firstMsg = await sendChatMessage({
+      name: "First message",
+      message: "Hello",
+      current_page_url: `${STORE_DOMAIN}/`,
+    });
+    const convId = firstMsg.events.find(e => e.conversation_id)?.conversation_id;
+    if (convId) {
+      // Set count to limit before follow-up
+      await configureBilling({ plan: 'free', count: 25 });
+      // Follow-up in same conversation should NOT be blocked
+      const followUpBody = JSON.stringify({
+        message: "What products do you have?",
+        conversation_id: convId,
+        current_page_url: `${STORE_DOMAIN}/`,
+      });
+      const followUpRes = await fetch(CHAT_ENDPOINT, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+          "X-Shopify-Shop-Id": "test-shop",
+          Origin: STORE_DOMAIN,
+        },
+        body: followUpBody,
+      });
+      const followUpText = await followUpRes.text();
+      const followUpEvents = followUpText.split("\n\n")
+        .filter(b => b.startsWith("data: "))
+        .map(b => { try { return JSON.parse(b.slice(6)); } catch { return null; } })
+        .filter(Boolean);
+      const followUpBlocked = followUpEvents.some(e => e.type === 'billing_limit');
+      console.log(`    follow-up NOT blocked: ${!followUpBlocked ? "PASS" : "FAIL"}`);
+    } else {
+      console.log(`    follow-up NOT blocked: SKIP (no conversation_id)`);
+    }
+
+    // Test 4: Starter tier has higher limit
+    console.log("  [4/6] Starter tier higher limit...");
+    await configureBilling({ plan: 'starter', count: 50 }); // Starter = 100 limit, 50 used
+    const starterResult = await sendChatMessage({
+      name: "Starter under limit",
+      message: "Hello",
+      current_page_url: `${STORE_DOMAIN}/`,
+    });
+    const starterNotBlocked = !starterResult.billingLimit;
+    console.log(`    starter at 50/100 not blocked: ${starterNotBlocked ? "PASS" : "FAIL"}`);
+
+    // Test 5: Starter tier at limit
+    console.log("  [5/6] Starter tier at limit...");
+    await configureBilling({ plan: 'starter', count: 100 }); // At limit
+    const starterLimitResult = await sendChatMessage({
+      name: "Starter at limit",
+      message: "Hello",
+      current_page_url: `${STORE_DOMAIN}/`,
+    });
+    const starterBlocked = !!starterLimitResult.billingLimit;
+    console.log(`    starter at 100/100 blocked: ${starterBlocked ? "PASS" : "FAIL"}`);
+
+    // Test 6: Enterprise tier never blocked
+    console.log("  [6/6] Enterprise tier unlimited...");
+    await configureBilling({ plan: 'enterprise', count: 99999 });
+    const enterpriseResult = await sendChatMessage({
+      name: "Enterprise unlimited",
+      message: "Hello",
+      current_page_url: `${STORE_DOMAIN}/`,
+    });
+    const enterpriseNotBlocked = !enterpriseResult.billingLimit;
+    console.log(`    enterprise at 99999 not blocked: ${enterpriseNotBlocked ? "PASS" : "FAIL"}`);
+
+  } catch (err) {
+    console.log(`  Billing tests: FAIL (${err.message})`);
+  }
+
+  // Clean up billing state
+  try { await resetBilling(); } catch { /* ignore */ }
+  console.log();
+
   // ── Summary ─────────────────────────────────────────────────────
   console.log("=".repeat(70));
   console.log("  SUMMARY");
@@ -910,10 +1044,10 @@ async function main() {
   console.log(`Average total response time: ${formatMs(avgTotal)}`);
   console.log();
 
-  // Clean up: reset support hours and disconnect Prisma
+  // Clean up: reset support hours and billing
   try {
     await resetSupportHours();
-    await prisma.$disconnect();
+    await resetBilling();
   } catch { /* ignore cleanup errors */ }
 
   // Exit code

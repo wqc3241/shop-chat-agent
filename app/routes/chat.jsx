@@ -15,6 +15,8 @@ async function loadServerModules() {
     { createToolService },
     { getWebSearchTool, executeWebSearch },
     { cacheGet, cacheSet, CACHE_KEYS, CACHE_TTL },
+    { classifyIntent, TOOL_CATEGORY_MAP },
+    { getTierLimits },
   ] = await Promise.all([
     import("../db.server"),
     import("../services/config.server"),
@@ -23,6 +25,8 @@ async function loadServerModules() {
     import("../services/tool.server"),
     import("../services/websearch.server"),
     import("../services/cache.server"),
+    import("../services/intent.server"),
+    import("../services/billing-config.server"),
   ]);
   return {
     saveMessage: db.saveMessage,
@@ -32,12 +36,15 @@ async function loadServerModules() {
     updateConversationMeta: db.updateConversationMeta,
     updateConversationOrders: db.updateConversationOrders,
     getChatSettings: db.getChatSettings,
+    saveChatSettings: db.saveChatSettings,
     getConversation: db.getConversation,
     getMessagesSince: db.getMessagesSince,
     updateConversation: db.updateConversation,
     updateMessageFeedback: db.updateMessageFeedback,
+    rateConversation: db.rateConversation,
     upsertCustomerActivity: db.upsertCustomerActivity,
     getCustomerActivity: db.getCustomerActivity,
+    incrementAiConvoCount: db.incrementAiConvoCount,
     AppConfig,
     createSseStream,
     createOpenAIService,
@@ -48,6 +55,9 @@ async function loadServerModules() {
     cacheSet,
     CACHE_KEYS,
     CACHE_TTL,
+    classifyIntent,
+    TOOL_CATEGORY_MAP,
+    getTierLimits,
   };
 }
 
@@ -63,11 +73,14 @@ export async function loader({ request }) {
     updateConversationMeta,
     updateConversationOrders,
     getChatSettings,
+    saveChatSettings,
     getConversation,
     getMessagesSince,
     updateConversation,
     updateMessageFeedback,
+    rateConversation,
     upsertCustomerActivity,
+    incrementAiConvoCount,
     AppConfig,
     createSseStream,
     createOpenAIService,
@@ -78,6 +91,9 @@ export async function loader({ request }) {
     cacheSet,
     CACHE_KEYS,
     CACHE_TTL,
+    classifyIntent,
+    TOOL_CATEGORY_MAP,
+    getTierLimits,
   } = await loadServerModules();
 
   const deps = {
@@ -88,11 +104,14 @@ export async function loader({ request }) {
     updateConversationMeta,
     updateConversationOrders,
     getChatSettings,
+    saveChatSettings,
     getConversation,
     getMessagesSince,
     updateConversation,
     updateMessageFeedback,
+    rateConversation,
     upsertCustomerActivity,
+    incrementAiConvoCount,
     AppConfig,
     createSseStream,
     createOpenAIService,
@@ -103,6 +122,9 @@ export async function loader({ request }) {
     cacheSet,
     CACHE_KEYS,
     CACHE_TTL,
+    classifyIntent,
+    TOOL_CATEGORY_MAP,
+    getTierLimits,
   };
 
   // Handle OPTIONS requests (CORS preflight)
@@ -120,6 +142,11 @@ export async function loader({ request }) {
     return handleFeedbackRequest(request, url, deps);
   }
 
+  // Handle conversation rating
+  if (url.searchParams.has('rate') && url.searchParams.has('conversation_id')) {
+    return handleRatingRequest(request, url, deps);
+  }
+
   // Handle customer activity updates
   if (url.searchParams.has('activity') && url.searchParams.has('conversation_id')) {
     return handleActivityRequest(request, url, deps);
@@ -133,6 +160,11 @@ export async function loader({ request }) {
   // Handle history fetch requests - matches /chat?history=true&conversation_id=XYZ
   if (url.searchParams.has('history') && url.searchParams.has('conversation_id')) {
     return handleHistoryRequest(request, url.searchParams.get('conversation_id'), deps);
+  }
+
+  // Handle test setup (configure support hours / billing via HTTP for E2E tests)
+  if (url.searchParams.has('test_setup')) {
+    return handleTestSetup(request, url, deps);
   }
 
   // Handle SSE requests
@@ -197,6 +229,7 @@ async function handleHistoryRequest(request, conversationId, deps) {
   return new Response(JSON.stringify({
     messages,
     mode: conversation?.mode || 'ai',
+    resolved: !!conversation?.resolvedAt,
   }), { headers: { ...getCorsHeaders(request), 'Content-Type': 'application/json' } });
 }
 
@@ -225,6 +258,7 @@ async function handlePollRequest(request, url, deps) {
   return new Response(JSON.stringify({
     messages: merchantMessages,
     mode: conversation?.mode || 'ai',
+    resolved: !!conversation?.resolvedAt,
   }), { headers: { ...getCorsHeaders(request), 'Content-Type': 'application/json' } });
 }
 
@@ -254,6 +288,71 @@ async function handleFeedbackRequest(request, url, deps) {
 }
 
 /**
+ * Handle conversation rating submission
+ */
+async function handleRatingRequest(request, url, deps) {
+  const { rateConversation } = deps;
+  try {
+    const conversationId = url.searchParams.get('conversation_id');
+    const rating = parseInt(url.searchParams.get('rating'), 10);
+    if (!conversationId || !Number.isInteger(rating) || rating < 1 || rating > 5) {
+      return new Response(JSON.stringify({ error: 'Invalid rating (must be 1-5)' }), {
+        status: 400, headers: { ...getCorsHeaders(request), 'Content-Type': 'application/json' }
+      });
+    }
+    await rateConversation(conversationId, rating);
+    return new Response(JSON.stringify({ success: true }), {
+      headers: { ...getCorsHeaders(request), 'Content-Type': 'application/json' }
+    });
+  } catch (error) {
+    console.error('Error saving rating:', error);
+    return new Response(JSON.stringify({ error: 'Failed to save rating' }), {
+      status: 500, headers: { ...getCorsHeaders(request), 'Content-Type': 'application/json' }
+    });
+  }
+}
+
+/**
+ * Handle test setup requests (E2E test support — configures DB state via HTTP)
+ */
+async function handleTestSetup(request, url, deps) {
+  const { saveChatSettings } = deps;
+  const setupType = url.searchParams.get('test_setup');
+  const shop = url.searchParams.get('shop');
+
+  if (!shop) {
+    return new Response(JSON.stringify({ error: 'Missing shop parameter' }), {
+      status: 400, headers: { ...getCorsHeaders(request), 'Content-Type': 'application/json' }
+    });
+  }
+
+  try {
+    if (setupType === 'billing') {
+      const data = {};
+      if (url.searchParams.has('billing_plan')) data.billingPlan = url.searchParams.get('billing_plan');
+      if (url.searchParams.has('monthly_ai_convo_count')) data.monthlyAiConvoCount = parseInt(url.searchParams.get('monthly_ai_convo_count'), 10);
+      if (url.searchParams.has('monthly_convo_reset_at')) data.monthlyConvoResetAt = new Date(url.searchParams.get('monthly_convo_reset_at'));
+      if (url.searchParams.has('billing_status')) data.billingStatus = url.searchParams.get('billing_status');
+      await saveChatSettings(shop, data);
+    } else {
+      // Default: support_hours setup
+      const supportHoursText = url.searchParams.get('support_hours_text') || '';
+      const supportSchedule = url.searchParams.get('support_schedule') || '';
+      await saveChatSettings(shop, { supportHoursText, supportSchedule });
+    }
+
+    return new Response(JSON.stringify({ success: true }), {
+      headers: { ...getCorsHeaders(request), 'Content-Type': 'application/json' }
+    });
+  } catch (error) {
+    console.error('Error in test setup:', error);
+    return new Response(JSON.stringify({ error: 'Failed to configure' }), {
+      status: 500, headers: { ...getCorsHeaders(request), 'Content-Type': 'application/json' }
+    });
+  }
+}
+
+/**
  * Handle customer activity updates from storefront
  */
 async function handleActivityRequest(request, url, deps) {
@@ -265,7 +364,7 @@ async function handleActivityRequest(request, url, deps) {
       const { getConversation } = deps;
       await upsertCustomerActivity(conversationId, {});
       const conv = await getConversation(conversationId);
-      return new Response(JSON.stringify({ mode: conv?.mode || 'ai' }), {
+      return new Response(JSON.stringify({ mode: conv?.mode || 'ai', resolved: !!conv?.resolvedAt }), {
         status: 200,
         headers: { ...getCorsHeaders(request), 'Content-Type': 'application/json' },
       });
@@ -408,6 +507,7 @@ async function handleChatSession({
     getChatSettings,
     getConversation,
     updateConversation,
+    incrementAiConvoCount,
     AppConfig,
     createOpenAIService,
     createToolService,
@@ -417,6 +517,9 @@ async function handleChatSession({
     cacheSet,
     CACHE_KEYS,
     CACHE_TTL,
+    classifyIntent,
+    TOOL_CATEGORY_MAP,
+    getTierLimits,
   } = deps;
   const openaiService = createOpenAIService();
 
@@ -488,6 +591,29 @@ async function handleChatSession({
       console.warn('Failed to connect to storefront MCP server:', storefrontResult.reason?.message);
     }
 
+    // ── Billing quota check ──
+    // Only count NEW conversations (first user message = no prior DB messages except the one just saved)
+    const chatSettings = chatSettingsResult?.status === 'fulfilled' ? chatSettingsResult.value : null;
+    const priorDbMessages = dbMessagesResult.status === 'fulfilled' ? dbMessagesResult.value : [];
+    // A new conversation has only 1 message (the one we just saved above)
+    const isNewConversation = priorDbMessages.length <= 1;
+    if (isNewConversation && shopHostname && chatSettings) {
+      const tier = getTierLimits(chatSettings.billingPlan || 'free');
+      if (tier.monthlyAiConvos !== Infinity && chatSettings.monthlyAiConvoCount >= tier.monthlyAiConvos) {
+        // Set conversation to pending_merchant so it appears in the merchant's live chat queue
+        await updateConversation(conversationId, { mode: 'pending_merchant' });
+        stream.sendMessage({
+          type: 'billing_limit',
+          plan: chatSettings.billingPlan || 'free',
+          limit: tier.monthlyAiConvos,
+          used: chatSettings.monthlyAiConvoCount,
+        });
+        stream.sendMessage({ type: 'mode', mode: 'pending_merchant' });
+        stream.sendMessage({ type: 'end_turn' });
+        return;
+      }
+    }
+
     // Handle "request human" — check support hours before setting pending_merchant
     let supportUnavailableData = null;
     if (requestHuman && conversation) {
@@ -517,6 +643,15 @@ async function handleChatSession({
     const currentProductHandle = isProductPage
       ? (currentPageUrl.match(/\/products\/([^?&#]+)/) || [])[1] || null
       : null;
+
+    // Classify intent for pre-routing (zero-latency, pure regex)
+    const rawDbMessages = dbMessagesResult.status === 'fulfilled' ? dbMessagesResult.value : [];
+    const intent = classifyIntent({
+      message: userMessage,
+      currentPageUrl,
+      conversationHistory: rawDbMessages,
+    });
+    console.log(`Intent: ${intent.intent}, tools: [${intent.toolCategories}], maxIter: ${intent.maxIterations}`);
 
     // Phase 2: Run customer MCP connection and fitment auto-search in parallel
     // (both depend on Phase 1 results but are independent of each other)
@@ -598,7 +733,7 @@ async function handleChatSession({
         systemNote += ' However, human support is currently UNAVAILABLE.';
         if (supportUnavailableData.reason) systemNote += ` Reason: ${supportUnavailableData.reason}.`;
         if (supportUnavailableData.displayText) systemNote += ` Support hours: ${supportUnavailableData.displayText}.`;
-        systemNote += ' Apologize that human support is not available right now, mention the support hours, and continue assisting them.';
+        systemNote += ' You MUST include the exact support hours in your response. If there is a reason (like a holiday), you MUST state the reason. Apologize that human support is not available right now and continue assisting them.';
       } else {
         systemNote += ' Acknowledge this in your response and let them know a team member has been notified and will join shortly. Continue assisting them in the meantime.';
       }
@@ -696,12 +831,12 @@ async function handleChatSession({
           }
           else {
             shouldReturnProductCardsOnly = true;
-            explicitSearchStatusMessage = "I couldn't find an exact match. Try a different keyword and I'll search again.";
+            explicitSearchStatusMessage = "I couldn't find an exact match for that. Try a different keyword and I'll search again, or browse all products at our store.";
           }
         } else {
           console.warn('Proactive product search failed:', proactiveSearchResult?.error);
           shouldReturnProductCardsOnly = true;
-          explicitSearchStatusMessage = "I couldn't find results this time. Please try a different keyword.";
+          explicitSearchStatusMessage = "Product search is temporarily unavailable. You can browse all products at our store, or I can help with policies, orders, or other questions.";
         }
       } catch (error) {
         console.error('Error in proactive product search:', error);
@@ -724,6 +859,12 @@ async function handleChatSession({
         saveMessage(conversationId, 'assistant', JSON.stringify([{ type: 'text', text: explicitSearchStatusMessage }]))
           .catch((error) => console.error("Error saving product search response:", error));
       }
+      // Count this AI conversation for billing
+      if (isNewConversation && shopHostname) {
+        incrementAiConvoCount(shopHostname).catch((error) => {
+          console.error("Error incrementing AI convo count:", error);
+        });
+      }
       stream.sendMessage({ type: 'end_turn' });
       if (shouldShowProductCards && productsToDisplay.length > 0) {
         stream.sendMessage({
@@ -735,15 +876,19 @@ async function handleChatSession({
     }
 
     // Extract merchant's custom instructions (policies now come from Shopify MCP tool)
-    const chatSettings = chatSettingsResult?.status === 'fulfilled'
-      ? chatSettingsResult.value || {}
-      : {};
-    const customInstructions = chatSettings.customInstructions || '';
+    const customInstructions = (chatSettings || {}).customInstructions || '';
+
+    // Filter tools based on classified intent
+    const filteredTools = mcpClient.tools.filter(tool => {
+      const category = TOOL_CATEGORY_MAP[tool.name];
+      return !category || intent.toolCategories.includes(category);
+    });
 
     // Execute the conversation stream
+    let billingCounted = false; // Track whether we've counted this conversation for billing
     let finalMessage = { role: 'user', content: userMessage };
     let iterationCount = 0;
-    const maxIterations = 10; // Prevent infinite loops
+    const maxIterations = intent.maxIterations;
 
     while (finalMessage.stop_reason !== "end_turn" && iterationCount < maxIterations) {
       iterationCount++;
@@ -752,8 +897,10 @@ async function handleChatSession({
         {
           messages: conversationHistory,
           promptType,
-          tools: mcpClient.tools,
+          tools: filteredTools,
           customInstructions,
+          currentPageUrl,
+          intentContext: intent.systemContext,
         },
         {
           // Handle text chunks
@@ -801,6 +948,14 @@ async function handleChatSession({
               .catch((error) => {
                 console.error("Error saving message to database:", error);
               });
+
+            // Increment billing counter on first AI response in a new conversation
+            if (message.role === 'assistant' && !billingCounted && isNewConversation && shopHostname) {
+              billingCounted = true;
+              incrementAiConvoCount(shopHostname).catch((error) => {
+                console.error("Error incrementing AI convo count:", error);
+              });
+            }
 
             // Send a completion message
             stream.sendMessage({ type: 'message_complete' });
@@ -1019,6 +1174,10 @@ async function handleChatSession({
 
     if (iterationCount >= maxIterations) {
       console.warn("Reached maximum iterations, stopping conversation loop");
+      // If the AI never generated text, send a fallback message
+      if (!stream.hasTextContent()) {
+        stream.sendMessage({ type: 'chunk', chunk: "I wasn't able to find the specific information you're looking for. Could you try rephrasing your question, or I can help you with something else?" });
+      }
       stream.sendMessage({ type: 'end_turn' });
     }
 
@@ -1253,9 +1412,16 @@ function isWithinSupportHours(settings, nowDate = new Date()) {
       const [startH, startM] = override.startTime.split(':').map(Number);
       const [endH, endM] = override.endTime.split(':').map(Number);
       const inRange = currentMinutes >= (startH * 60 + startM) && currentMinutes < (endH * 60 + endM);
-      return inRange
-        ? { available: true }
-        : { available: false, reason: override.reason, displayText: schedule.displayText };
+      if (inRange) return { available: true };
+      // Include override-specific hours so the AI can state today's actual hours
+      const fmtTime = (t) => {
+        const [h, m] = t.split(':').map(Number);
+        const ampm = h >= 12 ? 'PM' : 'AM';
+        const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+        return `${h12}:${m.toString().padStart(2, '0')} ${ampm}`;
+      };
+      const overrideDisplayText = `Today's support hours: ${fmtTime(override.startTime)} - ${fmtTime(override.endTime)} (${override.reason || 'special schedule'})`;
+      return { available: false, reason: override.reason, displayText: overrideDisplayText };
     }
   }
 

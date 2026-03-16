@@ -12,6 +12,10 @@ api_version = "2026-04"
   compliance_topics = ["customers/data_request", "customers/redact", "shop/redact"]
   uri = "/webhooks"
 
+  [[webhooks.subscriptions]]
+  topics = ["app_subscriptions/update"]
+  uri = "/webhooks"
+
 [access_scopes]
 scopes = "customer_read_customers,customer_read_orders,customer_read_store_credit_account_transactions,customer_read_store_credit_accounts,unauthenticated_read_product_listings,read_products,read_legal_policies"
 

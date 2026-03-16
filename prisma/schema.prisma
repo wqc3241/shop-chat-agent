@@ -63,6 +63,7 @@ model Conversation {
   assignedTo    String?   // merchant staff identifier
   handoffAt     DateTime? // when merchant took over
   resolvedAt    DateTime?
+  rating        Int?
   messages      Message[]
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
@@ -72,18 +73,24 @@ model Conversation {
 }
 
 model ChatSettings {
-  id                 String   @id @default(cuid())
-  shop               String   @unique
-  welcomeMessage     String   @default("👋 Hi there! How can I help you today?")
-  promptType         String   @default("standardAssistant")
-  customInstructions String   @default("")
-  returnPolicy       String   @default("")
-  contactInfo        String   @default("")
-  bubbleColor        String   @default("#5046e4")
-  supportHoursText   String   @default("")
-  supportSchedule    String   @default("")
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  id                      String    @id @default(cuid())
+  shop                    String    @unique
+  welcomeMessage          String    @default("👋 Hi there! How can I help you today?")
+  promptType              String    @default("standardAssistant")
+  customInstructions      String    @default("")
+  returnPolicy            String    @default("")
+  contactInfo             String    @default("")
+  bubbleColor             String    @default("#5046e4")
+  supportHoursText        String    @default("")
+  supportSchedule         String    @default("")
+  billingPlan             String    @default("free")
+  billingSubscriptionId   String?
+  billingStatus           String    @default("active")
+  billingPeriodStart      DateTime?
+  monthlyAiConvoCount     Int       @default(0)
+  monthlyConvoResetAt     DateTime?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
 }
 
 model Message {

@@ -353,6 +353,9 @@
         const userMessage = chatInput.value.trim();
         const conversationId = localStorage.getItem('shopAiConversationId');
 
+        // Touch activity timestamp
+        localStorage.setItem('shopAiLastActiveAt', Date.now().toString());
+
         // Add user message to chat
         this.add(userMessage, 'user', messagesContainer);
 
@@ -732,6 +735,7 @@
           case 'id':
             if (data.conversation_id) {
               localStorage.setItem('shopAiConversationId', data.conversation_id);
+              localStorage.setItem('shopAiLastActiveAt', Date.now().toString());
             }
             break;
 
@@ -762,6 +766,7 @@
             break;
 
           case 'message_complete':
+            localStorage.setItem('shopAiLastActiveAt', Date.now().toString());
             ShopAIChat.UI.removeTypingIndicator();
             if (currentMessageElement && currentMessageElement.dataset.rawText && currentMessageElement.dataset.rawText.trim() !== '') {
               // Reveal the complete message
@@ -867,6 +872,15 @@
             unavailMsg += ' I\'ll keep helping you in the meantime!';
             ShopAIChat.Message.add(unavailMsg, 'assistant', messagesContainer);
             break;
+
+          case 'billing_limit':
+            ShopAIChat.UI.removeTypingIndicator();
+            ShopAIChat.Message.add(
+              "We have notified the merchant. Someone will be with you shortly.",
+              'assistant',
+              messagesContainer
+            );
+            break;
         }
       },
 
@@ -910,6 +924,12 @@
           if (!data.messages || data.messages.length === 0) {
             const welcomeMessage = window.shopChatConfig?.welcomeMessage || "👋 Hi there! How can I help you today?";
             ShopAIChat.Message.add(welcomeMessage, 'assistant', messagesContainer);
+            return;
+          }
+
+          // If conversation was resolved, show resolution overlay and stop
+          if (data.resolved) {
+            ShopAIChat.Resolution.show(messagesContainer);
             return;
           }
 
@@ -1055,7 +1075,13 @@
           fetch('/apps/chat-agent/chat?' + params.toString(), { method: 'GET', mode: 'cors' })
             .then(function(res) { return res.json(); })
             .then(function(data) {
-              if (!data || !data.mode) return;
+              if (!data) return;
+              // Check for resolution
+              if (data.resolved) {
+                ShopAIChat.Resolution.show(ShopAIChat.UI.elements.messagesContainer);
+                return;
+              }
+              if (!data.mode) return;
               var currentMode = localStorage.getItem('shopAiChatMode') || 'ai';
               if (data.mode !== currentMode) {
                 localStorage.setItem('shopAiChatMode', data.mode);
@@ -1263,6 +1289,13 @@
             if (data.mode && data.mode !== currentMode) {
               localStorage.setItem('shopAiChatMode', data.mode);
               ShopAIChat.ModeIndicator.update(data.mode);
+            }
+
+            // If conversation was resolved, show resolution overlay
+            if (data.resolved) {
+              ShopAIChat.Resolution.show(messagesContainer);
+              this.stop();
+              return;
             }
 
             // If mode changed back to AI, stop polling (heartbeat will detect future takeovers)
@@ -1575,6 +1608,128 @@
     },
 
     /**
+     * Resolution overlay — shown when merchant resolves conversation
+     */
+    Resolution: {
+      shown: false,
+
+      /**
+       * Show resolution overlay inside messages container
+       * @param {HTMLElement} messagesContainer - The messages container
+       */
+      show: function(messagesContainer) {
+        if (this.shown) return;
+        this.shown = true;
+
+        // Stop polling and heartbeat
+        ShopAIChat.Polling.stop();
+        ShopAIChat.Activity.stop();
+
+        // Disable chat input
+        var input = ShopAIChat.UI.elements.chatInput;
+        var sendBtn = ShopAIChat.UI.elements.sendButton;
+        if (input) { input.disabled = true; input.placeholder = 'Conversation resolved'; }
+        if (sendBtn) sendBtn.disabled = true;
+
+        // Create overlay
+        var overlay = document.createElement('div');
+        overlay.className = 'shop-ai-resolution-overlay';
+        overlay.innerHTML =
+          '<div class="shop-ai-resolution-content">' +
+            '<div class="shop-ai-resolution-icon">' +
+              '<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>' +
+            '</div>' +
+            '<h3 style="margin:12px 0 4px;font-size:18px;color:#0f172a;">Conversation Resolved</h3>' +
+            '<p style="margin:0 0 16px;color:#64748b;font-size:14px;">How was your experience?</p>' +
+            '<div class="shop-ai-star-rating" data-rating="0"></div>' +
+            '<button class="shop-ai-resolution-action" type="button">Start New Chat</button>' +
+          '</div>';
+
+        messagesContainer.appendChild(overlay);
+
+        // Render star buttons
+        var starContainer = overlay.querySelector('.shop-ai-star-rating');
+        for (var i = 1; i <= 5; i++) {
+          var star = document.createElement('button');
+          star.type = 'button';
+          star.className = 'shop-ai-star-btn';
+          star.dataset.value = i;
+          star.innerHTML = '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+          star.addEventListener('click', (function(val) {
+            return function() { ShopAIChat.Resolution.selectRating(val, starContainer); };
+          })(i));
+          starContainer.appendChild(star);
+        }
+
+        // "Start New Chat" button
+        var newChatBtn = overlay.querySelector('.shop-ai-resolution-action');
+        newChatBtn.addEventListener('click', function() {
+          ShopAIChat.Resolution.clearAndReset();
+        });
+
+        ShopAIChat.UI.scrollToBottom();
+      },
+
+      /**
+       * Handle star selection
+       */
+      selectRating: function(rating, starContainer) {
+        starContainer.dataset.rating = rating;
+        var stars = starContainer.querySelectorAll('.shop-ai-star-btn');
+        stars.forEach(function(s) {
+          var val = parseInt(s.dataset.value, 10);
+          s.classList.toggle('selected', val <= rating);
+        });
+        this.submitRating(rating);
+      },
+
+      /**
+       * Submit rating to backend
+       */
+      submitRating: function(rating) {
+        var convId = localStorage.getItem('shopAiConversationId');
+        if (!convId) return;
+        var url = '/apps/chat-agent/chat?rate=true&conversation_id=' + encodeURIComponent(convId) + '&rating=' + rating;
+        fetch(url, { method: 'GET', mode: 'cors' }).catch(function() {});
+      },
+
+      /**
+       * Clear conversation state and reset UI for a fresh chat
+       */
+      clearAndReset: function() {
+        this.shown = false;
+
+        // Clear localStorage
+        localStorage.removeItem('shopAiConversationId');
+        localStorage.removeItem('shopAiChatMode');
+        localStorage.removeItem('shopAiLastActiveAt');
+        localStorage.removeItem('shopAiLastMessage');
+        localStorage.removeItem('shopAiTokenPollingId');
+
+        // Stop timers
+        ShopAIChat.Polling.stop();
+        ShopAIChat.Activity.stop();
+
+        // Clear messages
+        var mc = ShopAIChat.UI.elements.messagesContainer;
+        if (mc) mc.innerHTML = '';
+
+        // Re-enable input
+        var input = ShopAIChat.UI.elements.chatInput;
+        var sendBtn = ShopAIChat.UI.elements.sendButton;
+        if (input) { input.disabled = false; input.placeholder = 'Type your message...'; }
+        if (sendBtn) sendBtn.disabled = false;
+
+        // Hide mode indicator
+        ShopAIChat.ModeIndicator.update('ai');
+
+        // Show welcome message
+        var welcomeMessage = window.shopChatConfig?.welcomeMessage || "Hi there! How can I help you today?";
+        ShopAIChat.Message.add(welcomeMessage, 'assistant', mc);
+      }
+    },
+
+    /**
      * Initialize the chat application
      */
     init: function() {
@@ -1584,10 +1739,29 @@
 
       this.UI.init(container);
 
-      // Check for existing conversation
-      const conversationId = localStorage.getItem('shopAiConversationId');
+      // Check for existing conversation (with 15-minute staleness check)
+      let conversationId = localStorage.getItem('shopAiConversationId');
+      const lastActiveAt = localStorage.getItem('shopAiLastActiveAt');
+      const STALE_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
+
+      if (conversationId && lastActiveAt) {
+        const elapsed = Date.now() - parseInt(lastActiveAt, 10);
+        if (elapsed > STALE_TIMEOUT_MS) {
+          // Conversation is stale — clear and start fresh
+          console.log('Conversation stale (' + Math.round(elapsed / 60000) + 'min), starting fresh');
+          localStorage.removeItem('shopAiConversationId');
+          localStorage.removeItem('shopAiChatMode');
+          localStorage.removeItem('shopAiLastActiveAt');
+          localStorage.removeItem('shopAiLastMessage');
+          localStorage.removeItem('shopAiTokenPollingId');
+          conversationId = null;
+        }
+      }
 
       if (conversationId) {
+        // Refresh activity timestamp on page load (conversation is still active)
+        localStorage.setItem('shopAiLastActiveAt', Date.now().toString());
+
         // Fetch conversation history and restore mode
         this.API.fetchChatHistory(conversationId, this.UI.elements.messagesContainer);
 

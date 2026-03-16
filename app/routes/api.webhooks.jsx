@@ -1,5 +1,6 @@
 import { authenticate } from "../shopify.server";
-import db, { getCustomerData, redactCustomerData, redactShopData } from "../db.server";
+import db, { getCustomerData, redactCustomerData, redactShopData, updateShopBilling } from "../db.server";
+import { SHOPIFY_PLAN_NAMES } from "../services/billing-config.server";
 
 export const action = async ({ request }) => {
   const { shop, session, topic, payload } = await authenticate.webhook(request);
@@ -41,6 +42,33 @@ export const action = async ({ request }) => {
       // Delete ALL data for the uninstalled shop
       await redactShopData(shop);
       console.log(`Redacted all shop data for ${shop}`);
+      break;
+    }
+
+    case 'APP_SUBSCRIPTIONS_UPDATE': {
+      const subscriptionId = payload?.app_subscription?.admin_graphql_api_id;
+      const status = payload?.app_subscription?.status;
+      const planName = payload?.app_subscription?.name;
+
+      console.log(`Subscription update for ${shop}: plan=${planName}, status=${status}, id=${subscriptionId}`);
+
+      if (status === 'ACTIVE') {
+        const internalPlan = SHOPIFY_PLAN_NAMES[planName] || 'free';
+        await updateShopBilling(shop, {
+          plan: internalPlan,
+          subscriptionId,
+          status: 'active',
+          periodStart: new Date(),
+        });
+      } else if (status === 'CANCELLED' || status === 'EXPIRED' || status === 'DECLINED') {
+        await updateShopBilling(shop, {
+          plan: 'free',
+          subscriptionId: null,
+          status: 'cancelled',
+        });
+      } else if (status === 'FROZEN') {
+        await updateShopBilling(shop, { status: 'frozen' });
+      }
       break;
     }
 

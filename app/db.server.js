@@ -415,6 +415,46 @@ export async function releaseConversation(id) {
   }
 }
 
+/**
+ * Rate a conversation (1-5 stars)
+ * @param {string} id - The conversation ID
+ * @param {number} rating - Rating value (1-5)
+ * @returns {Promise<Object|null>} The updated conversation or null
+ */
+export async function rateConversation(id, rating) {
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+    throw new Error('Rating must be an integer between 1 and 5');
+  }
+  try {
+    return await prisma.conversation.update({
+      where: { id },
+      data: { rating },
+    });
+  } catch (error) {
+    console.error('Error rating conversation:', error);
+    return null;
+  }
+}
+
+/**
+ * Get all conversations for a customer by email
+ * @param {string} shop - The shop domain
+ * @param {string} email - The customer's email
+ * @returns {Promise<Array>} Array of conversations
+ */
+export async function getConversationsByEmail(shop, email) {
+  try {
+    return await prisma.conversation.findMany({
+      where: { shop, customerEmail: email },
+      orderBy: { createdAt: 'desc' },
+      include: { _count: { select: { messages: true } } },
+    });
+  } catch (error) {
+    console.error('Error getting conversations by email:', error);
+    return [];
+  }
+}
+
 // ── Dashboard functions ──────────────────────────────────────────────
 
 /**
@@ -684,6 +724,132 @@ export async function redactShopData(shop) {
     prisma.chatSettings.deleteMany({ where: { shop } }),
     prisma.session.deleteMany({ where: { shop } }),
   ]);
+}
+
+// ── Billing functions ────────────────────────────────────────────────
+
+/**
+ * Atomically increment the monthly AI conversation count for a shop.
+ * Auto-resets the counter if the reset date has passed.
+ * @param {string} shop - The shop domain
+ * @returns {Promise<Object>} Updated settings with new count
+ */
+export async function incrementAiConvoCount(shop) {
+  try {
+    const settings = await prisma.chatSettings.findUnique({ where: { shop } });
+    if (!settings) return null;
+
+    const now = new Date();
+
+    // If reset date has passed, reset counter to 1 and set new reset date
+    if (settings.monthlyConvoResetAt && now >= new Date(settings.monthlyConvoResetAt)) {
+      const nextReset = new Date(now);
+      nextReset.setDate(nextReset.getDate() + 30);
+      return await prisma.chatSettings.update({
+        where: { shop },
+        data: {
+          monthlyAiConvoCount: 1,
+          monthlyConvoResetAt: nextReset,
+        },
+      });
+    }
+
+    // If no reset date set yet, initialize it
+    if (!settings.monthlyConvoResetAt) {
+      const nextReset = new Date(now);
+      nextReset.setDate(nextReset.getDate() + 30);
+      return await prisma.chatSettings.update({
+        where: { shop },
+        data: {
+          monthlyAiConvoCount: settings.monthlyAiConvoCount + 1,
+          monthlyConvoResetAt: nextReset,
+        },
+      });
+    }
+
+    // Normal increment
+    return await prisma.chatSettings.update({
+      where: { shop },
+      data: {
+        monthlyAiConvoCount: { increment: 1 },
+      },
+    });
+  } catch (error) {
+    console.error('Error incrementing AI convo count:', error);
+    return null;
+  }
+}
+
+/**
+ * Update billing info for a shop (called from webhook)
+ * @param {string} shop - The shop domain
+ * @param {Object} data - Billing fields to update
+ */
+export async function updateShopBilling(shop, { plan, subscriptionId, status, periodStart }) {
+  try {
+    const data = {};
+    if (plan !== undefined) data.billingPlan = plan;
+    if (subscriptionId !== undefined) data.billingSubscriptionId = subscriptionId;
+    if (status !== undefined) data.billingStatus = status;
+    if (periodStart !== undefined) data.billingPeriodStart = periodStart;
+
+    // When upgrading, reset the counter if changing plans
+    if (plan && plan !== 'free') {
+      // Don't reset counter on status-only updates
+      const current = await prisma.chatSettings.findUnique({ where: { shop } });
+      if (current && current.billingPlan !== plan) {
+        data.monthlyAiConvoCount = 0;
+        const nextReset = new Date();
+        nextReset.setDate(nextReset.getDate() + 30);
+        data.monthlyConvoResetAt = nextReset;
+      }
+    }
+
+    return await prisma.chatSettings.upsert({
+      where: { shop },
+      create: { shop, ...data },
+      update: data,
+    });
+  } catch (error) {
+    console.error('Error updating shop billing:', error);
+    return null;
+  }
+}
+
+/**
+ * Get AI conversation usage info for a shop
+ * @param {string} shop - The shop domain
+ * @returns {Promise<Object>} Usage info { count, limit, plan, resetAt }
+ */
+/**
+ * Plan-to-limit mapping (kept in sync with billing-config.server.js)
+ * Duplicated here to avoid circular imports.
+ */
+const PLAN_LIMITS = { free: 25, starter: 100, pro: 300, enterprise: Infinity };
+
+export async function getAiConvoUsage(shop) {
+  try {
+    const settings = await prisma.chatSettings.findUnique({
+      where: { shop },
+      select: {
+        billingPlan: true,
+        monthlyAiConvoCount: true,
+        monthlyConvoResetAt: true,
+      },
+    });
+    if (!settings) return { count: 0, limit: 25, plan: 'free', resetAt: null };
+
+    const limit = PLAN_LIMITS[settings.billingPlan] || 25;
+    return {
+      count: settings.monthlyAiConvoCount,
+      limit,
+      plan: settings.billingPlan,
+      resetAt: settings.monthlyConvoResetAt,
+    };
+  } catch (error) {
+    console.error('Error getting AI convo usage:', error);
+    return { count: 0, limit: 25, plan: 'free', resetAt: null };
+  }
 }
 
 // ── Data retention & cleanup ─────────────────────────────────────────
