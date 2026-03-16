@@ -30,11 +30,12 @@ The dev server port is dynamic (assigned by Vite at startup). On `predev`, Prism
 **Request flow (optimized — parallelized for <2s TTFT):**
 1. Chat bubble (`extensions/chat-bubble/assets/chat.js`) sends POST to `/chat` endpoint
 2. `app/routes/chat.jsx` receives the request
-3. **Phase 1 (parallel):** `getCustomerAccountUrls()`, `connectToStorefrontServer()`, and `saveMessage() → getConversationHistory()` run concurrently via `Promise.allSettled`
-4. **Phase 2 (parallel):** Customer MCP connection (500ms timeout) and fitment auto-search (if on product page with fitment question) run concurrently via `Promise.all`
-5. OpenAI service streams a completion with MCP tools converted to OpenAI function-calling format
-6. When OpenAI returns `finish_reason: "tool_calls"`, tools are executed via MCP, results fed back, and the loop continues until a final text response
-7. Response is streamed back to the client via SSE; messages are persisted to the database
+3. **Phase 1 (parallel):** `getCustomerAccountUrls()`, `connectToStorefrontServer()`, `getConversationHistory()`, and `getChatSettings()` run concurrently via `Promise.allSettled`
+4. **Billing check:** If new conversation and AI quota exceeded → route to `pending_merchant`, send `billing_limit` SSE event, return early (no OpenAI cost)
+5. **Phase 2 (parallel):** Customer MCP connection (500ms timeout) and fitment auto-search (if on product page with fitment question) run concurrently via `Promise.all`
+6. OpenAI service streams a completion with MCP tools converted to OpenAI function-calling format
+7. When OpenAI returns `finish_reason: "tool_calls"`, tools are executed via MCP, results fed back, and the loop continues until a final text response
+8. Response is streamed back to the client via SSE; messages are persisted to the database
 
 **Key services in `app/services/`:**
 - `openai.server.js` — OpenAI client creation, MCP→OpenAI tool conversion, streaming completions
@@ -46,7 +47,8 @@ The dev server port is dynamic (assigned by Vite at startup). On `predev`, Prism
 
 **Other key files:**
 - `app/mcp-client.js` — MCP protocol client; connects to customer MCP (authenticated) and storefront MCP (public), handles JSON-RPC
-- `app/db.server.js` — Prisma database operations (sessions, conversations, messages, customer tokens, PKCE code verifiers)
+- `billing-config.server.js` — Tier definitions (free/starter/pro/enterprise), `getTierLimits()`, `getAiConvoLimit()`
+- `app/db.server.js` — Prisma database operations (sessions, conversations, messages, customer tokens, PKCE code verifiers, billing)
 - `app/auth.server.js` — OAuth 2.0 + PKCE flow for customer account access
 - `app/prompts/prompts.json` — System prompts v6.0 (two variants: `standardAssistant` and `enthusiasticAssistant`)
 
@@ -72,6 +74,7 @@ Required in `.env`:
 - Access scopes: `customer_read_customers`, `customer_read_orders`, `customer_read_store_credit_account_transactions`, `customer_read_store_credit_accounts`, `unauthenticated_read_product_listings`, `read_products`, `read_legal_policies`
 - Dev store: `dev-nlp-brochure-2.myshopify.com` (Partners-managed under org 129937154).
 - GDPR webhooks use `compliance_topics` (not `topics`) in the toml — Shopify CLI rejects `topics` for compliance webhooks.
+- Billing webhook: `app_subscriptions/update` (uses `topics`, not `compliance_topics`)
 - The app proxy config (`[app_proxy]`) has `automatically_update_urls_on_dev = true`.
 
 ## Production Deployment
@@ -183,6 +186,34 @@ Key behaviors to know when sending requests through the proxy (`/apps/chat-agent
 - **Error masking**: Non-200 responses get replaced with store's HTML error page
 - **Added parameters**: Proxy adds `shop`, `logged_in_customer_id`, `path_prefix`, `timestamp`, `signature`
 
+## Billing (Tiered Pricing)
+
+4 tiers gating **AI conversation sessions** — human/merchant chat is always free and unlimited on all plans.
+
+| | Free | Starter ($19/mo) | Pro ($49/mo) | Enterprise |
+|---|---|---|---|---|
+| AI conversations/month | 25 | 100 | 300 | Custom |
+| Trial | — | 14 days | 14 days | — |
+
+**What counts:** A unique `conversation_id` where the AI generates at least one response. Follow-up messages in the same conversation don't count again. Conversations immediately handed to merchant (mode = `merchant` before AI responds) don't count.
+
+**Quota enforcement flow:**
+1. `chat.jsx` checks `monthlyAiConvoCount >= tier.monthlyAiConvos` on new conversations (≤1 prior DB message)
+2. If over limit → sets `pending_merchant` mode, sends `billing_limit` SSE event + `end_turn` (no OpenAI cost)
+3. Customer sees: "We have notified the merchant. Someone will be with you shortly." (never expose billing state to customers)
+4. If under limit → AI responds normally, `incrementAiConvoCount()` fires on first assistant message
+
+**Counter reset:** 30-day rolling window via `monthlyConvoResetAt`. `incrementAiConvoCount()` auto-resets when past due.
+
+**Shopify integration:**
+- `shopify.server.js` has `billing` config with Starter and Pro plans
+- `app_subscriptions/update` webhook → `api.webhooks.jsx` handles ACTIVE/CANCELLED/FROZEN/EXPIRED
+- `app.billing.jsx` — merchant-facing billing page with usage meter and plan comparison
+
+**DB fields on ChatSettings:** `billingPlan`, `billingSubscriptionId`, `billingStatus`, `billingPeriodStart`, `monthlyAiConvoCount`, `monthlyConvoResetAt`
+
+**Test setup:** `GET /chat?test_setup=billing&shop=X&billing_plan=free&monthly_ai_convo_count=25` configures billing state for E2E tests.
+
 ## Natural Language Support Hours
 
 Merchants describe support hours in plain language (single text field) instead of structured inputs. OpenAI parses the text into a JSON schedule at save time, so runtime checks remain fast.
@@ -208,7 +239,7 @@ node tests/chat-test.mjs --store-domain <domain>  # Custom store domain
 
 Test scenarios: greeting, product search, fitment, policies (return, shipping, contact), follow-up, conversational shopping (vague/specific/browsing/gift requests), keyword extraction, order tracking.
 
-E2E tests: feedback (both values), activity tracking, conversation persistence, MCP policy tool accessibility, timestamp/message_id verification.
+E2E tests: feedback (both values), activity tracking, conversation persistence, MCP policy tool accessibility, timestamp/message_id verification, billing quota (6 tests: limit reached, under limit, continuation not blocked, starter tier, enterprise unlimited).
 
 ## Workflow Rules
 
