@@ -1,67 +1,125 @@
-# Build an AI Agent for Your Storefront
+# Shop Chat Agent
 
-A Shopify template app that lets you embed an AI-powered chat widget on your storefront. Shoppers can search for products, ask about policies or shipping, and complete purchases - all without leaving the conversation. Under the hood it speaks the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) to tap into Shopify’s APIs.
+A Shopify app that embeds an AI-powered chat widget on storefronts. Shoppers can search products, ask about policies, manage carts, track orders, and initiate returns — all via natural language. The backend uses OpenAI with Shopify's [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) for tool invocation.
 
-## Overview
+## Features
 
-- **What it is**: A chat widget + backend that turns any storefront into an AI shopping assistant.
-- **Key features**:
-  - Natural-language product discovery
-  - Store policy & FAQ lookup
-  - Create carts, add or remove items, and initiate checkout
-  - Track orders and initiate returns
+- **Natural-language product discovery** — search, filter, and get recommendations via chat
+- **Conversational shopping assistant** — asks clarifying questions for vague requests, searches immediately for specific ones
+- **Store policy & FAQ lookup** — auto-synced from Shopify admin, queried via MCP at runtime
+- **Cart management** — add/remove items, view cart, initiate checkout
+- **Order tracking & returns** — look up order status, initiate returns
+- **Live chat (merchant takeover)** — merchants can take over conversations from AI in real-time
+- **Customer activity tracking** — see what page customers are on, what's in their cart, product they're viewing
+- **Fitment/compatibility answers** — auto-searches product data on product pages for fitment questions
+- **Web search** — OpenAI-backed web search for questions outside store knowledge
+- **Natural language support hours** — merchants describe hours in plain text, parsed by AI
+- **Customer feedback** — thumbs up/down on AI responses
+- **Tiered billing** — 4 plans gating AI conversation volume (human chat always unlimited)
 
-## Developer Docs
-- Everything from installation to deep dives lives on https://shopify.dev/docs/apps/build/storefront-mcp.
-- Clone this repo and follow the instructions on the dev docs.
+## Billing Tiers
 
-## Examples
-- `hi` > will return a LLM based response. Note that you can customize the LLM call with your own prompt.
-- `can you search for snowboards` > will use the `search_shop_catalog` MCP tool.
-- `add The Videographer Snowboard to my cart` > will use the `update_cart` MCP tool and offer a checkout URL.
-- `update my cart to make that 2 items please` > will use the `update_cart` MCP tool.
-- `can you tell me what is in my cart` > will use the `get_cart` MCP tool.
-- `what languages is your store available in?` > will use the `search_shop_policies_and_faqs` MCP tool.
-- `I'd like to checkout` > will call checkout from one of the above MCP cart tools.
-- `Show me my recent orders` > will use the `get_most_recent_order_status` MCP tool.
-- `Can you give me more details about order Id 1` > will use the `get_order_status` MCP tool.
+| | Free | Starter ($19/mo) | Pro ($49/mo) | Enterprise |
+|---|---|---|---|---|
+| AI conversations/month | 25 | 100 | 300 | Custom |
+| Human/merchant chat | Unlimited | Unlimited | Unlimited | Unlimited |
+| All features | Yes | Yes | Yes | Yes |
+| Trial | — | 14 days | 14 days | — |
+
+When AI quota is exhausted, conversations are routed to the merchant's live chat queue. Customers see: "We have notified the merchant. Someone will be with you shortly."
 
 ## Architecture
 
 ### Components
-This app consists of two main components:
 
-1. **Backend**: A React Router app server that handles communication with OpenAI, processes chat messages, and acts as an MCP Client.
-2. **Chat UI**: A Shopify theme extension that provides the customer-facing chat interface.
+1. **Backend (React Router server)** — handles chat messages, streams responses via SSE, orchestrates OpenAI + MCP tool calls, enforces billing quotas
+2. **Chat UI (Shopify theme extension)** — `extensions/chat-bubble/` provides the storefront-facing chat widget
+3. **Admin UI** — settings, live chat, billing management, conversation history
 
-When you start the app, it will:
-- Start React Router in development mode.
-- Tunnel your local server so Shopify can reach it.
-- Provide a preview URL to install the app on your development store.
+### Request Flow
 
-For direct testing, point your test suite at the `/chat` endpoint (GET or POST for streaming).
-
-### MCP Tools Integration
-- The backend already initializes all Shopify MCP tools—see [`app/mcp-client.js`](./app/mcp-client.js).
-- These tools let your LLM invoke product search, cart actions, order lookups, etc.
-- More in our [dev docs](https://shopify.dev/docs/apps/build/storefront-mcp).
+1. Chat bubble sends POST to `/chat` endpoint
+2. **Phase 1 (parallel):** Customer account URLs, storefront MCP connection, conversation history, and chat settings fetched concurrently
+3. **Billing check:** New conversations checked against tier quota — over limit routes to merchant
+4. **Phase 2 (parallel):** Customer MCP connection and fitment auto-search run concurrently
+5. OpenAI streams a completion with MCP tools; tool calls loop until final text response
+6. Response streamed back via SSE; messages persisted to database
 
 ### Tech Stack
-- **Framework**: [React Router](https://reactrouter.com/)
-- **AI**: [OpenAI](https://www.openai.com)
-- **Shopify Integration**: [@shopify/shopify-app-react-router](https://www.npmjs.com/package/@shopify/shopify-app-react-router)
-- **Database**: SQLite (via Prisma) for session storage
 
-## Customizations
-This repo can be customized. You can:
-- Edit the prompt
-- Change the chat widget UI
-- Swap out the LLM
+- **Framework**: [React Router](https://reactrouter.com/) v7
+- **AI**: [OpenAI](https://www.openai.com) (GPT-4o for chat, GPT-4o-mini for schedule parsing/judging)
+- **Shopify**: [@shopify/shopify-app-react-router](https://www.npmjs.com/package/@shopify/shopify-app-react-router) v12
+- **Database**: PostgreSQL via [Prisma](https://www.prisma.io/)
+- **Hosting**: [Fly.io](https://fly.io)
 
-You can learn how from our [dev docs](https://shopify.dev/docs/apps/build/storefront-mcp).
+### Key Services
+
+| File | Purpose |
+|------|---------|
+| `app/services/openai.server.js` | OpenAI client, MCP→OpenAI tool conversion, streaming |
+| `app/services/tool.server.js` | Tool response processing, product formatting |
+| `app/services/streaming.server.js` | SSE StreamManager with backpressure |
+| `app/services/billing-config.server.js` | Tier definitions and helpers |
+| `app/services/intent.server.js` | Zero-latency intent classification (regex) |
+| `app/services/websearch.server.js` | OpenAI web search (Responses API) |
+| `app/services/schedule-parser.server.js` | NL → JSON schedule parser |
+| `app/mcp-client.js` | MCP protocol client (storefront + customer) |
+| `app/db.server.js` | All Prisma database operations |
+
+## Development
+
+```bash
+npm run dev              # Start dev server (Shopify CLI handles tunneling)
+npm run build            # Production build
+npm run setup            # Generate Prisma client + run migrations
+npm run lint             # ESLint
+npm run typecheck        # Type checking
+```
+
+### Environment Variables
+
+Required in `.env`:
+- `OPENAI_API_KEY` — OpenAI API key
+- `SHOPIFY_API_KEY` — Shopify app API key
+- `DATABASE_URL` — PostgreSQL connection string
+
+### Database
+
+```bash
+npx prisma generate          # Regenerate client after schema changes
+npx prisma migrate dev       # Create new migration
+npx prisma migrate deploy    # Apply migrations
+```
+
+## Testing
+
+```bash
+node tests/chat-test.mjs                         # Basic speed test
+node tests/chat-test.mjs --judge                  # With LLM quality judge
+node tests/chat-test.mjs --verbose                # Show full response text
+node tests/chat-test.mjs --base-url <url>         # Test against custom URL
+```
+
+**Test coverage:** greeting, product search, fitment, policies, follow-up, conversational shopping, keyword extraction, order tracking, support hours (6 E2E scenarios with per-test DB config), billing quota (6 tests), feedback, activity tracking, conversation persistence, MCP tool accessibility.
 
 ## Deployment
-Follow standard Shopify app deployment procedures as outlined in the [Shopify documentation](https://shopify.dev/docs/apps/deployment/web).
 
-## Contributing
-We appreciate your interest in contributing to this project. As this is an example repository intended for educational and reference purposes, we are not accepting contributions.
+```bash
+# Deploy to Fly.io
+fly deploy --app nlp-shop-chat-agent
+
+# Deploy Shopify app config (webhooks, scopes, etc.)
+npx shopify app deploy --allow-updates
+```
+
+- **Production URL**: https://nlp-shop-chat-agent.fly.dev
+- **Health check**: `GET /health`
+- Startup runs `prisma migrate deploy` automatically
+
+## Shopify App Config
+
+- **Config file**: `shopify.app.shop-chat-agent.toml`
+- **Org**: Next Level Performance (129937154)
+- **Dev store**: `dev-nlp-brochure-2.myshopify.com`
+- **Webhooks**: GDPR compliance (`customers/data_request`, `customers/redact`, `shop/redact`) + billing (`app_subscriptions/update`)
