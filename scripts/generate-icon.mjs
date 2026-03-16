@@ -19,23 +19,36 @@ const C = SIZE / 2; // center = 600
 const BG = '#5046e4';
 const WHITE = '#ffffff';
 
+// We want the icon element to fill ~11/16ths of 1200px = 825px
+const BUBBLE_WIDTH = 850;
+const BUBBLE_HEIGHT = 650;
+const BUBBLE_RX = 100;
+const TAIL_HEIGHT = 150;
+
+const BUBBLE_X = C - BUBBLE_WIDTH / 2;
+const BUBBLE_Y = C - (BUBBLE_HEIGHT + TAIL_HEIGHT) / 2;
+
+// Shopping bag dimensions
+// Body: 340x300. Handle height: 130. Total height: ~430.
+// We center the entire bag (including handles) inside the bubble body.
+const BAG_Y_OFFSET = 35; // (250 - 180) / 2 to center the handle+body bounding box
+
 const svg = `
 <svg width="${SIZE}" height="${SIZE}" viewBox="0 0 ${SIZE} ${SIZE}" xmlns="http://www.w3.org/2000/svg">
   <rect width="${SIZE}" height="${SIZE}" fill="${BG}" />
 
-  <!-- Chat bubble: centered in canvas, fills ~11/16 -->
-  <!-- Bubble body -->
-  <rect x="260" y="195" width="680" height="520" rx="80" ry="80" fill="${WHITE}" />
+  <!-- Chat bubble body -->
+  <rect x="${BUBBLE_X}" y="${BUBBLE_Y}" width="${BUBBLE_WIDTH}" height="${BUBBLE_HEIGHT}" rx="${BUBBLE_RX}" ry="${BUBBLE_RX}" fill="${WHITE}" />
+  
   <!-- Bubble tail — bottom-left -->
-  <polygon points="340,715 440,715 280,870" fill="${WHITE}" />
+  <polygon points="${BUBBLE_X + 100},${BUBBLE_Y + BUBBLE_HEIGHT} ${BUBBLE_X + 220},${BUBBLE_Y + BUBBLE_HEIGHT} ${BUBBLE_X + 20},${BUBBLE_Y + BUBBLE_HEIGHT + TAIL_HEIGHT}" fill="${WHITE}" />
 
   <!-- Shopping bag — centered inside the bubble body -->
-  <!-- Bubble center is at (600, 455). Bag is drawn centered there. -->
-  <g transform="translate(600, 435)" fill="none" stroke="${BG}" stroke-width="36" stroke-linecap="round" stroke-linejoin="round">
+  <g transform="translate(${C}, ${BUBBLE_Y + BUBBLE_HEIGHT / 2 - BAG_Y_OFFSET})" fill="none" stroke="${BG}" stroke-width="45" stroke-linecap="round" stroke-linejoin="round">
     <!-- Bag body -->
-    <rect x="-135" y="-30" width="270" height="240" rx="20" ry="20" />
+    <rect x="-170" y="-50" width="340" height="300" rx="30" ry="30" />
     <!-- Bag handles -->
-    <path d="M-70,-30 C-70,-130 70,-130 70,-30" />
+    <path d="M-90,-50 C-90,-180 90,-180 90,-50" />
   </g>
 </svg>
 `;
